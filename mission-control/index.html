@@ -154,6 +154,9 @@ button.active{background:var(--cyan);color:var(--bg)}
 #brain-badge{border:1px solid var(--cyan-dim);padding:0 12px;display:flex;align-items:center;color:var(--text-dim);font-size:8px;white-space:nowrap}
 #brain-badge b{color:var(--text-dim);font-weight:400;margin-left:6px}
 #brain-badge.live b{color:var(--cyan);text-shadow:var(--cyan-glow)}
+#btn-handsfree.active{animation:hf 1.6s infinite}
+@keyframes hf{0%,100%{box-shadow:0 0 4px var(--cyan-dim)}50%{box-shadow:0 0 14px var(--cyan)}}
+#reply.streaming::after{content:"▌";color:var(--cyan);animation:blink 1s infinite}
 </style>
 </head>
 <body class="boot">
@@ -245,6 +248,7 @@ button.active{background:var(--cyan);color:var(--bg)}
   <div id="input-row">
     <input id="cmd" type="text" placeholder="Digite um comando · ex.: 'receita de ontem', 'anúncios', 'e-mails', 'resumo matinal'" autocomplete="off">
     <button id="btn-send">Enviar</button>
+    <button id="btn-handsfree" title="Escuta contínua com a palavra de ativação">◉ Mãos livres</button>
     <div id="src-badge">Fonte de dados<b id="src-text">SIMULADO</b></div>
     <div id="brain-badge" title="LOCAL = regras embutidas · CLAUDE = servidor local ligado à API">Cérebro<b id="brain-text">LOCAL</b></div>
   </div>
@@ -363,8 +367,9 @@ const CONFIG = {
   tomVoz: 0.95,
   arquivoDados: "../data/mission-data.json", // gravado pelo Scout; ignorado em file://
   backend: {                                  // servidor local (server/server.mjs). Detectado automaticamente em http(s).
-    health: "/api/health", chat: "/api/chat", briefing: "/api/briefing", timeoutMs: 60000
+    health: "/api/health", chat: "/api/chat", briefing: "/api/briefing", eventos: "/api/eventos", timeoutMs: 180000
   },
+  palavraDeAtivacao: "jarvis",                // modo mãos livres: "Jarvis, como está a receita?"
   intervaloTelemetriaMs: 3200,
   intervaloDiagMs: 4600,
   nomeUsuario: "senhor"        // como o Jarvis se dirige a você
@@ -628,12 +633,13 @@ let recog = null, listening = false;
 function setState(s, label){ jarvis.state = s; $("#state").textContent = label || {idle:"AGUARDANDO",listening:"OUVINDO…",thinking:"PROCESSANDO…",speaking:"FALANDO"}[s]; }
 function startListening(){
   if (listening) return;
+  if (maosLivres.recog){ try { maosLivres.recog.onend = null; maosLivres.recog.stop(); } catch(_){} maosLivres.recog = null; }
   if (!SR){ say("Reconhecimento de voz não está disponível neste navegador. Use o campo de texto."); return; }
   try { speechSynthesis.cancel(); } catch(_){}
   recog = new SR(); recog.lang = CONFIG.idiomaVoz; recog.interimResults = false; recog.maxAlternatives = 1;
   recog.onresult = e => { const txt = e.results[0][0].transcript; handleInput(txt); };
   recog.onerror = e => { log("diag", `voz: ${e.error}`, "warn"); stopListening(); if (e.error==="not-allowed") say("Preciso de permissão para usar o microfone."); };
-  recog.onend = () => { listening = false; if (jarvis.state==="listening") setState("idle"); };
+  recog.onend = () => { listening = false; if (jarvis.state==="listening") setState("idle"); if (maosLivres.ativo) setTimeout(reiniciarEscutaContinua, 600); };
   recog.start(); listening = true; setState("listening"); log("telemetry","Microfone aberto");
 }
 function stopListening(){ if (recog && listening){ try{ recog.stop(); }catch(_){} } listening = false; if (jarvis.state==="listening") setState("idle"); }
@@ -646,8 +652,8 @@ function pickVoice(){
 }
 if ("speechSynthesis" in window){ pickVoice(); speechSynthesis.onvoiceschanged = pickVoice; }
 
-function say(text, {log:doLog=true}={}){
-  $("#reply").textContent = text;
+function say(text, {log:doLog=true, manterTexto=false}={}){
+  if (!manterTexto) $("#reply").textContent = text;
   if (doLog) log("telemetry", "JARVIS: " + text, "ai");
   if (!("speechSynthesis" in window)) return Promise.resolve();
   return new Promise(res=>{
@@ -667,7 +673,7 @@ function say(text, {log:doLog=true}={}){
    (Claude) substitua `responder` por uma chamada ao SEU backend — nunca
    coloque chaves de API neste arquivo, ele roda no navegador.
    ===================================================================== */
-const cerebro = { modo: "local", modelo: null, historico: [] };   // modo: local · claude
+const cerebro = { modo: "local", modelo: null, historico: [], sessionId: (crypto.randomUUID ? crypto.randomUUID() : "s"+Date.now()), eventos: null };   // modo: local · claude
 
 async function detectarBackend(){
   if (!/^https?:/.test(location.protocol)) return;
@@ -677,31 +683,73 @@ async function detectarBackend(){
     if (h.configured){ cerebro.modo = "claude"; cerebro.modelo = h.model;
       $("#brain-text").textContent = "CLAUDE · " + h.model; $("#brain-badge").classList.add("live");
       log("telemetry", `Cérebro: Claude (${h.model}, effort ${h.effort}) via servidor local`, "ai");
+      if (h.tools) log("diag", `ferramentas: ${h.tools.join(", ")}`);
+      abrirEventos();
     } else { log("diag", "Servidor local sem credencial · cérebro em modo local", "warn"); }
   } catch(e){ log("diag", `Sem servidor local (${e.message}) · cérebro em modo local`); }
 }
 
-async function chamarBackend(url, body){
+/* ---- fala em fila: frases entram conforme chegam do streaming e são ditas em ordem ---- */
+let filaFala = Promise.resolve();
+function enfileirarFala(texto){ const t = texto.trim(); if (!t) return filaFala; filaFala = filaFala.then(()=>say(t, {log:false, manterTexto:true})).catch(()=>{}); return filaFala; }
+
+/* ---- chamada em streaming (SSE via POST). Fala frase a frase; devolve o texto completo. ---- */
+async function chamarBackendStream(url, body, {aoStatus}={}){
   const ctl = new AbortController(); const t = setTimeout(()=>ctl.abort(), CONFIG.backend.timeoutMs);
+  let buffer = "", completo = "", pendente = "", recusado = false, done = null;
+  const reply = $("#reply"); reply.textContent = ""; reply.classList.add("streaming");
+  const soltarFrases = (forcar)=>{
+    // separa frases completas para a síntese não esperar o fim da resposta
+    let m; const re = /[^.!?…\n]*[.!?…]+["”»)]?\s+|[^\n]*\n+/g; let ultimo = 0;
+    while ((m = re.exec(pendente))){ enfileirarFala(m[0]); ultimo = re.lastIndex; }
+    pendente = pendente.slice(ultimo);
+    if (forcar && pendente.trim()){ enfileirarFala(pendente); pendente = ""; }
+  };
   try {
     const r = await fetch(url, {method:"POST", headers:{"content-type":"application/json"}, body: JSON.stringify(body||{}), signal: ctl.signal});
-    const j = await r.json().catch(()=>({}));
-    if (!r.ok) throw new Error(j.erro || `HTTP ${r.status}`);
-    return j;
-  } finally { clearTimeout(t); }
+    if (!r.ok){ const j = await r.json().catch(()=>({})); throw new Error(j.erro || `HTTP ${r.status}`); }
+    const reader = r.body.getReader(), dec = new TextDecoder();
+    while (true){
+      const {value, done: fim} = await reader.read(); if (fim) break;
+      buffer += dec.decode(value, {stream:true});
+      let idx; while ((idx = buffer.indexOf("\n\n")) >= 0){
+        const bloco = buffer.slice(0, idx); buffer = buffer.slice(idx+2);
+        let ev = "message", data = "";
+        for (const linha of bloco.split("\n")){ if (linha.startsWith("event:")) ev = linha.slice(6).trim(); else if (linha.startsWith("data:")) data += linha.slice(5).trim(); }
+        if (!data) continue; let j; try { j = JSON.parse(data); } catch { continue; }
+        if (ev === "delta"){ completo += j.texto; pendente += j.texto; reply.textContent = completo.length > 260 ? "…" + completo.slice(-260) : completo; soltarFrases(false); }
+        else if (ev === "status"){ setState("thinking", j.texto.toUpperCase() + "…"); log("telemetry", "JARVIS » " + j.texto); aoStatus && aoStatus(j.texto); }
+        else if (ev === "recusa"){ recusado = true; pendente = ""; completo = j.texto; reply.textContent = j.texto; enfileirarFala(j.texto); }
+        else if (ev === "erro"){ throw new Error(j.erro || "erro do servidor"); }
+        else if (ev === "done"){ done = j; }
+      }
+    }
+    if (!recusado) soltarFrases(true);
+    if (done){
+      if (done.usage) log("diag", `claude ${done.model}: ${done.usage.input_tokens} in · ${done.usage.output_tokens} out · cache ${done.usage.cache_read_input_tokens||0}${done.tools?.length ? " · ferramentas: "+done.tools.join(",") : ""}`);
+      if (done.truncated) log("diag", "resposta truncada por max_tokens", "warn");
+    }
+    log("telemetry", "JARVIS: " + completo.slice(0, 400), "ai");
+    return completo;
+  } finally { clearTimeout(t); reply.classList.remove("streaming"); await filaFala; if (jarvis.state !== "listening") setState("idle"); }
 }
 
 async function responder(q){
   if (cerebro.modo === "claude"){
-    try {
-      const j = await chamarBackend(CONFIG.backend.chat, { message: q, history: cerebro.historico });
-      cerebro.historico.push({role:"user", content:q}, {role:"assistant", content:j.reply});
-      if (cerebro.historico.length > 24) cerebro.historico.splice(0, cerebro.historico.length - 24);
-      if (j.usage) log("diag", `claude: ${j.usage.input_tokens} in · ${j.usage.output_tokens} out · cache ${j.usage.cache_read_input_tokens||0}`);
-      return j.reply;
-    } catch(e){ log("diag", `Claude indisponível (${e.message}) · respondendo em modo local`, "warn"); }
+    try { await chamarBackendStream(CONFIG.backend.chat, { message: q, sessionId: cerebro.sessionId }); return null; }
+    catch(e){ if (e.name === "AbortError") { log("diag", "Claude demorou demais · respondendo em modo local", "warn"); } else log("diag", `Claude indisponível (${e.message}) · respondendo em modo local`, "warn"); }
   }
   return responderLocal(q);
+}
+
+/* ---- eventos proativos do servidor: lembretes, dados novos, ações das ferramentas ---- */
+function abrirEventos(){
+  if (cerebro.eventos || !("EventSource" in window)) return;
+  const es = new EventSource(CONFIG.backend.eventos); cerebro.eventos = es;
+  es.addEventListener("lembrete", e=>{ const j = JSON.parse(e.data); log("telemetry", `LEMBRETE ${j.id}: ${j.texto}`, "warn"); enfileirarFala(`Lembrete, ${CONFIG.nomeUsuario}: ${j.texto}.`); });
+  es.addEventListener("dados", async e=>{ const j = JSON.parse(e.data); await loadLiveData(); log("telemetry", `Dados atualizados (${j.fonte}, ${j.atualizadoEm})`, "ai"); if (j.alertas) enfileirarFala(`Dados atualizados no painel, ${CONFIG.nomeUsuario}. Há ${j.alertas} alerta${j.alertas>1?"s":""}.`); });
+  es.addEventListener("acao", ()=> loadLiveData());
+  es.onerror = ()=> log("diag", "canal de eventos reconectando…");
 }
 
 async function responderLocal(q){
@@ -745,13 +793,8 @@ async function morningBriefing(){
   if (briefingRunning) return; briefingRunning = true; $("#btn-morning").classList.add("active");
   if (cerebro.modo === "claude"){
     try {
-      setState("thinking"); log("telemetry", "Pedindo o resumo matinal ao Claude…");
-      const j = await chamarBackend(CONFIG.backend.briefing);
-      const frases = j.briefing.replace(/\s+/g," ").match(/[^.!?]+[.!?]+["”]?\s*|[^.!?]+$/g) || [j.briefing];
-      const blocos = []; let acc = "";
-      for (const f of frases){ acc += f; if (acc.length > 220){ blocos.push(acc.trim()); acc = ""; } }
-      if (acc.trim()) blocos.push(acc.trim());
-      for (const b of blocos){ if (!briefingRunning) break; await say(b); }
+      setState("thinking", "PREPARANDO O RESUMO…"); log("telemetry", "Pedindo o resumo matinal ao Claude…");
+      await chamarBackendStream(CONFIG.backend.briefing, { sessionId: cerebro.sessionId });
       briefingRunning = false; $("#btn-morning").classList.remove("active"); return;
     } catch(e){ log("diag", `Resumo pelo Claude falhou (${e.message}) · usando resumo local`, "warn"); }
   }
@@ -774,6 +817,55 @@ async function morningBriefing(){
   briefingRunning = false; $("#btn-morning").classList.remove("active");
 }
 $("#btn-morning").addEventListener("click", e=>{ e.stopPropagation(); if (briefingRunning){ briefingRunning=false; speechSynthesis.cancel(); setState("idle"); } else morningBriefing(); });
+
+/* =====================================================================
+   13b. MÃOS LIVRES · escuta contínua com palavra de ativação
+   ---------------------------------------------------------------------
+   "Jarvis, como está a receita?"  → comando direto
+   "Jarvis."  → responde "Sim?" e espera o próximo trecho como comando
+   "Jarvis, pare" / "silêncio" enquanto fala → interrompe a fala
+   A escuta é pausada enquanto o JARVIS fala, para não ouvir a si mesmo.
+   ===================================================================== */
+const maosLivres = { ativo:false, recog:null, aguardandoComando:false, timer:null };
+const normalizar = t => t.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g,"");
+function iniciarMaosLivres(){
+  if (!SR){ say("Este navegador não tem reconhecimento de voz contínuo. Use o Chrome ou o Edge."); return; }
+  maosLivres.ativo = true; $("#btn-handsfree").classList.add("active"); $("#hint").textContent = `Mãos livres: diga "${CONFIG.palavraDeAtivacao}" e o comando`;
+  log("telemetry", "Mãos livres ativado · palavra de ativação: " + CONFIG.palavraDeAtivacao);
+  reiniciarEscutaContinua();
+}
+function pararMaosLivres(){
+  maosLivres.ativo = false; $("#btn-handsfree").classList.remove("active"); $("#hint").textContent = "Clique na esfera ou segure ESPAÇO para falar";
+  if (maosLivres.recog){ try { maosLivres.recog.onend = null; maosLivres.recog.stop(); } catch(_){} maosLivres.recog = null; }
+  if (jarvis.state === "listening") setState("idle"); log("telemetry", "Mãos livres desativado");
+}
+function reiniciarEscutaContinua(){
+  if (!maosLivres.ativo || listening) return;
+  const r = new SR(); r.lang = CONFIG.idiomaVoz; r.continuous = true; r.interimResults = false; r.maxAlternatives = 1;
+  r.onresult = e => {
+    for (let i = e.resultIndex; i < e.results.length; i++){
+      if (!e.results[i].isFinal) continue;
+      const bruto = e.results[i][0].transcript.trim(); const t = normalizar(bruto);
+      if (jarvis.state === "speaking"){
+        if (/\b(pare|para|parar|silencio|chega|cala)\b/.test(t)){ speechSynthesis.cancel(); briefingRunning = false; setState("idle"); log("telemetry", "VOCÊ: (interrupção)", "user"); }
+        continue;   // ignora o que o microfone captou da própria voz do JARVIS
+      }
+      const re = new RegExp("\\b" + CONFIG.palavraDeAtivacao + "\\b[,.!?:;\\s]*", "i");
+      const m = re.exec(t);
+      if (maosLivres.aguardandoComando){ clearTimeout(maosLivres.timer); maosLivres.aguardandoComando = false; setState("idle"); handleInput(m ? bruto.slice(m.index + m[0].length) || bruto : bruto); continue; }
+      if (!m) continue;   // sem palavra de ativação: ruído de ambiente, ignorar
+      const comando = bruto.slice(m.index + m[0].length).trim();
+      if (comando.length < 3){
+        maosLivres.aguardandoComando = true; setState("listening", "SIM?"); say("Sim?", {log:false});
+        maosLivres.timer = setTimeout(()=>{ maosLivres.aguardandoComando = false; if (jarvis.state==="listening") setState("idle"); }, 8000);
+      } else handleInput(comando);
+    }
+  };
+  r.onerror = e => { if (e.error === "not-allowed"){ pararMaosLivres(); say("Preciso de permissão para usar o microfone."); } else log("diag", `mãos livres: ${e.error}`); };
+  r.onend = () => { maosLivres.recog = null; if (maosLivres.ativo) setTimeout(reiniciarEscutaContinua, 400); };   // o Chrome encerra após silêncio; religa
+  try { r.start(); maosLivres.recog = r; } catch(e){ log("diag", `mãos livres: ${e.message}`, "warn"); }
+}
+$("#btn-handsfree").addEventListener("click", ()=> maosLivres.ativo ? pararMaosLivres() : iniciarMaosLivres());
 
 /* =====================================================================
    14. INTERAÇÃO · clique, ESPAÇO, campo de texto

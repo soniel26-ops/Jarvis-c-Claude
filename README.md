@@ -12,6 +12,8 @@ agents/subagentes/              descrições de cargo dos subagentes que o Opera
 conhecimento/faq.md             o limite do Operador: se não está aqui, escala
 data/mission-data.json          o objeto de dados que o painel lê e os agentes gravam
 data/registro-recomendacoes.md  histórico de 7 dias que o Conselheiro relê
+data/memoria.md                 memória do JARVIS entre sessões (ferramenta `memoria`)
+data/lembretes.json             lembretes com aviso falado (ferramenta `lembrete`)
 data/briefings/                 um arquivo por execução de agente
 ```
 
@@ -43,7 +45,7 @@ Voz: usa o reconhecimento e a síntese do próprio navegador (Chrome e Edge têm
 
 ## 1b. Rodar localmente ligado ao Claude
 
-O painel sozinho responde por regras simples. Com o servidor local em `server/`, quem responde é o Claude, com os dados do painel como contexto e a chave da API guardada só no processo Node.
+O painel sozinho responde por regras simples. Com o servidor local em `server/`, quem responde é o Claude Fable 5.1 (ou outro modelo que você escolher), com ferramentas, memória e os dados do painel como contexto. A chave da API fica só no processo Node.
 
 ```bash
 cd server
@@ -58,24 +60,54 @@ O que o servidor faz:
 | Rota | Função |
 |---|---|
 | `GET /` e arquivos estáticos | serve o painel e `data/mission-data.json` |
-| `GET /api/health` | diz se há credencial e qual modelo está em uso |
-| `POST /api/chat` | pergunta ao Claude com o `mission-data.json` no prompt de sistema e o histórico recente da conversa |
-| `POST /api/briefing` | pede ao Claude o resumo matinal falado a partir dos dados |
+| `GET /api/health` | diz se há credencial, qual modelo e quais ferramentas estão ativas |
+| `POST /api/chat` | conversa em streaming (SSE). O Claude pode usar ferramentas antes de responder; o painel fala frase a frase conforme o texto chega |
+| `POST /api/briefing` | resumo matinal em streaming, pelo mesmo caminho; lê o briefing do Explorador do dia se existir |
+| `GET /api/eventos` | canal de eventos proativos: lembretes que vencem, dados novos, ações executadas |
+| `POST /api/session/reset` | recomeça a conversa |
 
 No rodapé do painel o selo **CÉREBRO** mostra `LOCAL` ou `CLAUDE · <modelo>`. Se o servidor cair ou a chave faltar, o painel volta sozinho ao modo local e registra o motivo no diagnóstico.
+
+### O que o JARVIS consegue fazer com o Claude
+
+| Você diz | O que acontece |
+|---|---|
+| "Jarvis, como está a receita comparada ao mês passado?" | responde com os dados do painel, com fonte e data |
+| "O que o Explorador disse hoje sobre anúncios?" | lê `data/briefings/<hoje>-explorador.md` e responde |
+| "Lembre que eu prefiro pausar criativos só depois de 3 dias ruins." | grava em `data/memoria.md`; vale para todas as sessões futuras |
+| "Me lembra em 20 minutos de responder o cliente anual." | cria em `data/lembretes.json`; no horário, o painel fala o lembrete sozinho |
+| "Já pausei o IMG-12." | marca a recomendação como FEITO no registro e a tira das pendências |
+| "Adiciona ao FAQ: quando perguntarem sobre parcelamento, responda que..." | acrescenta a entrada FAQ-00N em `conhecimento/faq.md` |
+| "Muda a meta para quarenta mil até março." | atualiza alvo e prazo no `mission-data.json`; o painel recarrega |
+| "Como está o tempo em Paris?" / "Qual a cotação do euro?" | busca na web pela ferramenta da Anthropic e diz de quando é a informação |
+
+Tudo o que ele grava fica em arquivos versionados neste repositório. Ele não envia e-mail, não publica, não gasta e não altera receita ou anúncios; isso continua com o Operador e o Explorador, mediante sua aprovação.
+
+### Mãos livres
+
+O botão **◉ MÃOS LIVRES** liga a escuta contínua. Diga "Jarvis" seguido do comando; só "Jarvis" faz ele responder "Sim?" e esperar. Enquanto ele fala, a escuta ignora o que o microfone capta, exceto "Jarvis, pare" ou "silêncio", que interrompem. Chrome e Edge encerram a escuta após um silêncio longo; o painel religa sozinho.
 
 Configuração por variáveis de ambiente (ou `server/.env`):
 
 | Variável | Padrão | Uso |
 |---|---|---|
 | `ANTHROPIC_API_KEY` | obrigatória | chave da API. Alternativas: `ANTHROPIC_AUTH_TOKEN` ou um perfil do `ant auth login` |
-| `JARVIS_MODEL` | `claude-opus-5` | modelo |
-| `JARVIS_EFFORT` | `low` | `low` responde rápido para voz; `medium`/`high` para mais análise |
+| `JARVIS_MODEL` | `claude-fable-5-1` | modelo. `claude-opus-5` é a alternativa mais barata |
+| `JARVIS_EFFORT` | `medium` | `low` responde mais rápido; `high`/`xhigh` para análises mais fundas |
 | `JARVIS_PORT` | `8080` | porta |
 | `JARVIS_NOME_USUARIO` | `senhor` | como o Jarvis se dirige a você |
 | `JARVIS_FALLBACKS` | `1` | fallback automático do servidor da Anthropic se o modelo recusar (beta). `0` desliga |
+| `JARVIS_WEB_SEARCH` | `1` | ferramenta de busca na web (`web_search`). `0` desliga |
 
-O prompt de sistema do Jarvis carrega as mesmas regras dos agentes: nenhum número fora dos dados, `INDISPONÍVEL` nunca é substituído, e ele relata sem executar ações. O prompt está em `server/server.mjs`, na constante `SISTEMA_ESTAVEL`, e é cacheado entre chamadas.
+O prompt de sistema está em `server/server.mjs`, na constante `SISTEMA_ESTAVEL`. Ele carrega as regras dos agentes (nenhum número fora das fontes, `INDISPONÍVEL` nunca é substituído) e é cacheado entre chamadas.
+
+### Como o servidor trata o Claude Fable 5.1
+
+- O prompt de sistema e a lista de ferramentas são congelados no início de cada sessão; o histórico só recebe acréscimos. Quando `mission-data.json` muda, a nova versão entra como mensagem de sistema no meio da conversa, sem editar o que já foi dito.
+- Os blocos de raciocínio do modelo são devolvidos intactos a cada turno. Se a API rejeitar um bloco, o servidor pede para descartá-lo em vez de falhar e, como última saída, remove os blocos e repete.
+- Fallback de recusa ativo por padrão: se o classificador recusar, a API reexecuta em outro modelo na mesma chamada.
+- Recursos beta que a API da sua conta não aceitar são desligados sozinhos no primeiro erro, e o servidor segue sem eles.
+- A sessão recomeça após 60 turnos ou 12 horas. Cada carga do painel abre uma sessão nova; a memória em `data/memoria.md` é o que atravessa sessões.
 
 O servidor escuta só em `127.0.0.1` e recusa chamadas `/api/*` de outra origem. Não o exponha na internet como está.
 

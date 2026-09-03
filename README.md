@@ -4,6 +4,7 @@ Assistente pessoal de IA que monitora receita, gerencia e-mails, publica conteú
 
 ```
 mission-control/index.html      tela de controle (HTML único, CSS+JS embutidos, sem dependências)
+server/server.mjs               servidor local: serve o painel e liga o cérebro ao Claude (SDK oficial)
 agents/explorador.md            prompt + regras da rotina do Explorador (somente leitura)
 agents/operador.md              prompt + regras do Operador (e-mail, publicação, delegação)
 agents/conselheiro.md           prompt + regras do Conselheiro (3 recomendações/dia)
@@ -39,6 +40,44 @@ Interação:
 Comandos entendidos localmente: receita, anúncios, e-mails, tráfego, objetivo, alertas, pendentes, hora, status, resumo matinal.
 
 Voz: usa o reconhecimento e a síntese do próprio navegador (Chrome e Edge têm suporte completo; Firefox não tem reconhecimento). Ajuste `CONFIG.idiomaVoz` e `CONFIG.vozPreferida` no topo do script. Para a voz britânica estilo Jarvis via ElevenLabs, troque a função `say()` por uma chamada ao seu backend; não coloque a chave do ElevenLabs no HTML, ele roda no navegador.
+
+## 1b. Rodar localmente ligado ao Claude
+
+O painel sozinho responde por regras simples. Com o servidor local em `server/`, quem responde é o Claude, com os dados do painel como contexto e a chave da API guardada só no processo Node.
+
+```bash
+cd server
+npm install
+cp .env.example .env        # edite e coloque sua ANTHROPIC_API_KEY
+npm start
+# abra http://localhost:8080/mission-control/
+```
+
+O que o servidor faz:
+
+| Rota | Função |
+|---|---|
+| `GET /` e arquivos estáticos | serve o painel e `data/mission-data.json` |
+| `GET /api/health` | diz se há credencial e qual modelo está em uso |
+| `POST /api/chat` | pergunta ao Claude com o `mission-data.json` no prompt de sistema e o histórico recente da conversa |
+| `POST /api/briefing` | pede ao Claude o resumo matinal falado a partir dos dados |
+
+No rodapé do painel o selo **CÉREBRO** mostra `LOCAL` ou `CLAUDE · <modelo>`. Se o servidor cair ou a chave faltar, o painel volta sozinho ao modo local e registra o motivo no diagnóstico.
+
+Configuração por variáveis de ambiente (ou `server/.env`):
+
+| Variável | Padrão | Uso |
+|---|---|---|
+| `ANTHROPIC_API_KEY` | obrigatória | chave da API. Alternativas: `ANTHROPIC_AUTH_TOKEN` ou um perfil do `ant auth login` |
+| `JARVIS_MODEL` | `claude-opus-5` | modelo |
+| `JARVIS_EFFORT` | `low` | `low` responde rápido para voz; `medium`/`high` para mais análise |
+| `JARVIS_PORT` | `8080` | porta |
+| `JARVIS_NOME_USUARIO` | `senhor` | como o Jarvis se dirige a você |
+| `JARVIS_FALLBACKS` | `1` | fallback automático do servidor da Anthropic se o modelo recusar (beta). `0` desliga |
+
+O prompt de sistema do Jarvis carrega as mesmas regras dos agentes: nenhum número fora dos dados, `INDISPONÍVEL` nunca é substituído, e ele relata sem executar ações. O prompt está em `server/server.mjs`, na constante `SISTEMA_ESTAVEL`, e é cacheado entre chamadas.
+
+O servidor escuta só em `127.0.0.1` e recusa chamadas `/api/*` de outra origem. Não o exponha na internet como está.
 
 ## 2. Ligar cada número a uma fonte real
 
@@ -77,6 +116,6 @@ Se preferir não dar acesso de escrita ao repositório, aponte os agentes para u
 
 ## 6. Limitações conhecidas
 
-- O "cérebro" embutido no painel responde por regras simples sobre o objeto de dados. Ele não chama nenhum modelo. Para respostas em linguagem natural, substitua a função `responder()` por uma chamada ao seu backend que fale com a API do Claude.
+- Sem o servidor local, o painel responde por regras simples sobre o objeto de dados. Com o servidor (seção 1b), quem responde é o Claude. A voz britânica do ElevenLabs ainda exige uma rota própria no servidor; a chave nunca deve ir para o HTML.
 - A saudação falada na inicialização pode ser bloqueada pelo navegador até o primeiro clique (política de autoplay). O texto aparece de qualquer forma.
 - Os dados incluídos são simulados e servem para demonstrar o painel. O selo no rodapé deixa isso explícito.

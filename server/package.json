@@ -1,0 +1,15 @@
+{
+  "name": "jarvis-server",
+  "version": "1.0.0",
+  "description": "Servidor local do JARVIS: serve o painel e faz a ponte com a API do Claude",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "start": "node server.mjs",
+    "dev": "node --watch server.mjs"
+  },
+  "engines": { "node": ">=20" },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.80.0"
+  }
+}

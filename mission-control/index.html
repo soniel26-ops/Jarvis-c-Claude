@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>JARVIS · Controle da Missão</title>
+<link rel="icon" href="data:,">
 <style>
 /* =====================================================================
    JARVIS · CONTROLE DA MISSÃO
@@ -150,6 +151,9 @@ button.active{background:var(--cyan);color:var(--bg)}
 #src-badge{border:1px solid var(--cyan-dim);padding:0 12px;display:flex;align-items:center;color:var(--text-dim);font-size:8px}
 #src-badge b{color:var(--amber);font-weight:400;margin-left:6px}
 #src-badge.live b{color:var(--green)}
+#brain-badge{border:1px solid var(--cyan-dim);padding:0 12px;display:flex;align-items:center;color:var(--text-dim);font-size:8px;white-space:nowrap}
+#brain-badge b{color:var(--text-dim);font-weight:400;margin-left:6px}
+#brain-badge.live b{color:var(--cyan);text-shadow:var(--cyan-glow)}
 </style>
 </head>
 <body class="boot">
@@ -242,6 +246,7 @@ button.active{background:var(--cyan);color:var(--bg)}
     <input id="cmd" type="text" placeholder="Digite um comando · ex.: 'receita de ontem', 'anúncios', 'e-mails', 'resumo matinal'" autocomplete="off">
     <button id="btn-send">Enviar</button>
     <div id="src-badge">Fonte de dados<b id="src-text">SIMULADO</b></div>
+    <div id="brain-badge" title="LOCAL = regras embutidas · CLAUDE = servidor local ligado à API">Cérebro<b id="brain-text">LOCAL</b></div>
   </div>
 </div>
 
@@ -357,6 +362,9 @@ const CONFIG = {
   velocidadeVoz: 1.02,
   tomVoz: 0.95,
   arquivoDados: "../data/mission-data.json", // gravado pelo Scout; ignorado em file://
+  backend: {                                  // servidor local (server/server.mjs). Detectado automaticamente em http(s).
+    health: "/api/health", chat: "/api/chat", briefing: "/api/briefing", timeoutMs: 60000
+  },
   intervaloTelemetriaMs: 3200,
   intervaloDiagMs: 4600,
   nomeUsuario: "senhor"        // como o Jarvis se dirige a você
@@ -659,7 +667,44 @@ function say(text, {log:doLog=true}={}){
    (Claude) substitua `responder` por uma chamada ao SEU backend — nunca
    coloque chaves de API neste arquivo, ele roda no navegador.
    ===================================================================== */
+const cerebro = { modo: "local", modelo: null, historico: [] };   // modo: local · claude
+
+async function detectarBackend(){
+  if (!/^https?:/.test(location.protocol)) return;
+  try {
+    const r = await fetch(CONFIG.backend.health, {cache:"no-store"}); if (!r.ok) throw new Error(r.status);
+    const h = await r.json();
+    if (h.configured){ cerebro.modo = "claude"; cerebro.modelo = h.model;
+      $("#brain-text").textContent = "CLAUDE · " + h.model; $("#brain-badge").classList.add("live");
+      log("telemetry", `Cérebro: Claude (${h.model}, effort ${h.effort}) via servidor local`, "ai");
+    } else { log("diag", "Servidor local sem credencial · cérebro em modo local", "warn"); }
+  } catch(e){ log("diag", `Sem servidor local (${e.message}) · cérebro em modo local`); }
+}
+
+async function chamarBackend(url, body){
+  const ctl = new AbortController(); const t = setTimeout(()=>ctl.abort(), CONFIG.backend.timeoutMs);
+  try {
+    const r = await fetch(url, {method:"POST", headers:{"content-type":"application/json"}, body: JSON.stringify(body||{}), signal: ctl.signal});
+    const j = await r.json().catch(()=>({}));
+    if (!r.ok) throw new Error(j.erro || `HTTP ${r.status}`);
+    return j;
+  } finally { clearTimeout(t); }
+}
+
 async function responder(q){
+  if (cerebro.modo === "claude"){
+    try {
+      const j = await chamarBackend(CONFIG.backend.chat, { message: q, history: cerebro.historico });
+      cerebro.historico.push({role:"user", content:q}, {role:"assistant", content:j.reply});
+      if (cerebro.historico.length > 24) cerebro.historico.splice(0, cerebro.historico.length - 24);
+      if (j.usage) log("diag", `claude: ${j.usage.input_tokens} in · ${j.usage.output_tokens} out · cache ${j.usage.cache_read_input_tokens||0}`);
+      return j.reply;
+    } catch(e){ log("diag", `Claude indisponível (${e.message}) · respondendo em modo local`, "warn"); }
+  }
+  return responderLocal(q);
+}
+
+async function responderLocal(q){
   const s = q.toLowerCase(); const D = DADOS, R = D.receita, A = D.anuncios, G = D.objetivoPrincipal, E = D.email, T = D.trafego;
   const na = (v,txt) => isNA(v) ? `${txt}: indisponível na fonte.` : null;
   if (/resumo|matinal|briefing|bom dia/.test(s)) return morningBriefing();
@@ -698,6 +743,18 @@ async function handleInput(text){
 let briefingRunning = false;
 async function morningBriefing(){
   if (briefingRunning) return; briefingRunning = true; $("#btn-morning").classList.add("active");
+  if (cerebro.modo === "claude"){
+    try {
+      setState("thinking"); log("telemetry", "Pedindo o resumo matinal ao Claude…");
+      const j = await chamarBackend(CONFIG.backend.briefing);
+      const frases = j.briefing.replace(/\s+/g," ").match(/[^.!?]+[.!?]+["”]?\s*|[^.!?]+$/g) || [j.briefing];
+      const blocos = []; let acc = "";
+      for (const f of frases){ acc += f; if (acc.length > 220){ blocos.push(acc.trim()); acc = ""; } }
+      if (acc.trim()) blocos.push(acc.trim());
+      for (const b of blocos){ if (!briefingRunning) break; await say(b); }
+      briefingRunning = false; $("#btn-morning").classList.remove("active"); return;
+    } catch(e){ log("diag", `Resumo pelo Claude falhou (${e.message}) · usando resumo local`, "warn"); }
+  }
   const D = DADOS, R = D.receita, A = D.anuncios, T = D.trafego, E = D.email, G = D.objetivoPrincipal;
   const h = new Date().getHours(), cumpr = h<12 ? "Bom dia" : h<18 ? "Boa tarde" : "Boa noite";
   const partes = [];
@@ -741,7 +798,7 @@ async function boot(){
   log("diag","Sequência de inicialização iniciada");
   for (const [sel,name] of order){ const el = $(sel); if (el){ el.classList.add("boot-on"); } log("telemetry", `Módulo ativo: ${name}`); await new Promise(r=>setTimeout(r,180)); }
   document.body.classList.remove("boot");
-  renderData(); await loadLiveData();
+  renderData(); await Promise.all([loadLiveData(), detectarBackend()]);
   setState("idle");
   const h = new Date().getHours();
   const greeting = `${h<12?"Bom dia":h<18?"Boa tarde":"Boa noite"}, ${CONFIG.nomeUsuario}. Todos os sistemas online. Diga "resumo matinal" quando quiser começar.`;

@@ -1,0 +1,80 @@
+{
+  "meta": {
+    "objetivo": "R$ 30.000 de MRR até 31/12",
+    "moeda": "BRL",
+    "atualizadoEm": "2026-09-03T06:00:00-03:00",
+    "fonte": "SIMULADO"
+  },
+  "objetivoPrincipal": {
+    "rotulo": "MRR",
+    "alvo": 30000,
+    "atual": 18420,
+    "inicioPeriodo": "2026-01-01",
+    "prazo": "2026-12-31",
+    "status": "AUTO",
+    "fonte": "RevenueCat",
+    "data": "2026-09-02"
+  },
+  "receita": {
+    "ontem": 1240,
+    "mesAtual": 3720,
+    "mesmoPeriodoMesPassado": 3110,
+    "novasAssinaturas": 14,
+    "cancelamentos": 3,
+    "fonte": "RevenueCat",
+    "data": "2026-09-02"
+  },
+  "anuncios": {
+    "gastoOntem": 380,
+    "roas": 2.9,
+    "melhorCriativo": "VID-07 · antes/depois",
+    "piorCriativo": "IMG-12 · depoimento estático",
+    "fonte": "Meta Ads",
+    "data": "2026-09-02"
+  },
+  "trafego": {
+    "cadastros": 62,
+    "usuariosAtivos": 1180,
+    "variacoes": ["Cadastros +24% vs. faixa normal (orgânico)"],
+    "fonte": "Painel interno",
+    "data": "2026-09-02"
+  },
+  "email": {
+    "novos": 23,
+    "resolvidos": 17,
+    "rascunhos": 4,
+    "escalados": 2,
+    "fonte": "Gmail",
+    "data": "2026-09-03"
+  },
+  "publicacoes": {
+    "agendadas": 3,
+    "publicadasOntem": 2,
+    "fonte": "Buffer",
+    "data": "2026-09-02"
+  },
+  "alertas": [
+    "2 pagamentos falhados (R$ 198) — RevenueCat, 02/09",
+    "Criativo IMG-12 com ROAS 0.8 há 3 dias — Meta Ads"
+  ],
+  "recomendacoes": [
+    {
+      "acao": "Pausar o criativo IMG-12 e mover o orçamento para o VID-07.",
+      "evidencia": "IMG-12 com ROAS 0.8 por 3 dias; VID-07 com ROAS 4.1.",
+      "seIgnorar": "Cerca de R$ 400 de gasto sem retorno nesta semana."
+    },
+    {
+      "acao": "Enviar e-mail de recuperação para os 2 pagamentos falhados.",
+      "evidencia": "R$ 198 em risco; ambos ainda dentro do período de graça.",
+      "seIgnorar": "Os 2 viram cancelamentos em 5 dias."
+    },
+    {
+      "acao": "Responder aos 2 e-mails escalados pelo Operador (reembolso + preço).",
+      "evidencia": "Ambos aguardam há mais de 12h; um é cliente anual.",
+      "seIgnorar": "Risco de churn de um plano anual (R$ 588)."
+    }
+  ],
+  "pendentes7dias": [
+    "Atualizar faq.md com a política de troca de plano (recomendado em 29/08)."
+  ]
+}

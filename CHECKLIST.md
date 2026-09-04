@@ -74,7 +74,7 @@ Faça cada pergunta pelo campo de texto e olhe o terminal do servidor depois de 
 
 ## Fase 4 · Ligar os agentes (o que ainda não roda sozinho)
 
-Hoje os três agentes são prompts prontos em `agents/`. Eles só coletam e escrevem quando alguma coisa os executa no horário. Ainda não existe automação disso no repositório.
+Hoje os três agentes são prompts prontos em `agents/`. Eles só coletam e escrevem quando alguma coisa os executa no horário. Os scripts em `scripts/` fazem isso pela sua máquina com o Claude Code (opção B); a opção A usa rotinas na claude.ai.
 
 - [ ] **Escolher o executor.** Duas opções realistas:
   - **A · Rotinas do Claude** (claude.ai → Rotinas/tarefas agendadas, se disponíveis na sua conta): crie uma rotina por agente colando o prompt do arquivo correspondente. A rotina precisa conseguir gravar nos arquivos deste repositório: dê a ela acesso ao repositório GitHub `soniel26-ops/Jarvis-c-Claude` (ela faz commit) ou aponte a saída para uma pasta sincronizada (Google Drive, iCloud) e mude os caminhos em `server/ferramentas.mjs` (`ARQ`) e no painel (`CONFIG.arquivoDados`).

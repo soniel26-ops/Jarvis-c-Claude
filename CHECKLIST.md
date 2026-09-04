@@ -99,8 +99,9 @@ Hoje os três agentes são prompts prontos em `agents/`. Eles só coletam e escr
 
 ## Fase 6 · Segurança, custo e backup (20 min)
 
-- [ ] `server/.env` **nunca** vai para o Git (já está no `.gitignore`); confirme com `git status`.
-- [ ] O servidor escuta só em `127.0.0.1`. Não abra a porta no roteador nem use túnel público sem colocar autenticação na frente.
+- [ ] `server/.env` **nunca** vai para o Git (já está no `.gitignore`, assim como `server/certs/` e `data/fontes.json`); confirme com `git status`.
+- [ ] Chaves de fontes ao vivo sempre **só leitura** (Stripe: chave restrita; Meta: `ads_read`).
+- [ ] O servidor escuta só em `127.0.0.1` por padrão. Na rede local, só com `JARVIS_TOKEN` + HTTPS. Não abra a porta no roteador; fora de casa use Tailscale ou similar.
 - [ ] **Limite de gasto mensal** na conta Anthropic, e conferir Usage no fim da primeira semana. Ordem de custo: modelo (Fable 5.1 > Opus 5) > esforço > web search > tamanho do `mission-data.json`.
 - [ ] **Versionar o que o JARVIS escreve.** `./scripts/sincronizar.sh` (ou `.ps1`) faz commit de `data/` e `conhecimento/`, pull e push. Já entra no agendamento da Fase 4 às 06:30 e 21:00.
 - [ ] **Revisar `data/memoria.md` mensalmente**: apagar o que ficou errado ou velho.
@@ -113,8 +114,8 @@ Hoje os três agentes são prompts prontos em `agents/`. Eles só coletam e escr
 - [x] **Sessão persistente (pronto).** A conversa sobrevive a recargas do painel e reinícios do servidor (`data/sessoes/`, fora do Git). Diga "nova conversa" para recomeçar. A sessão ainda recomeça sozinha após 60 turnos ou 12 horas.
 - [ ] **Whisper (pronto).** Escolha em `server/.env`: `JARVIS_STT=openai` + `OPENAI_API_KEY` (API de áudio da OpenAI, modelo `whisper-1`, cobra por minuto de áudio), ou `JARVIS_STT=local` + `WHISPER_CMD` (instale o whisper.cpp e o ffmpeg; exemplo de comando no `.env.example`). Reinicie o servidor; o terminal mostra `transcrição: openai|local`. Teste: segure ESPAÇO, fale, solte; e no mãos livres diga só "Jarvis", espere o "Sim?" e fale o comando.
 - [x] **Subagentes do Operador (pronto).** `.claude/agents/`: desenvolvedor, designer, financeiro, pesquisador. Funcionam quando o Operador roda pelo Claude Code (Fase 4, opção B). Para adicionar outro, copie um arquivo e ajuste `description`, `tools` e `model`.
-- [ ] Ligar o painel a fontes ao vivo sem depender do arquivo (por exemplo o servidor consultar Stripe/RevenueCat direto por API).
-- [ ] Autenticação no servidor, se um dia quiser acessar de outro dispositivo da casa.
+- [ ] **Fontes ao vivo (pronto).** No `.env`: `STRIPE_SECRET_KEY` (chave restrita só leitura) e/ou `REVENUECAT_API_KEY` + `REVENUECAT_PROJECT_ID` e/ou `META_ACCESS_TOKEN` + `META_AD_ACCOUNT_ID`; outros painéis em `data/fontes.json` (copie `data/fontes.exemplo.json`). Reinicie: em 3 segundos o servidor coleta, o `mission-data.json` vira `REAL` e o selo FONTE DE DADOS muda. Depois, a cada 30 min. Teste dizendo "Jarvis, atualiza os dados".
+- [ ] **Acesso do celular/tablet (pronto).** `JARVIS_TOKEN=<frase longa>`, `JARVIS_HOST=0.0.0.0`, `./scripts/gerar-certificado.sh <ip>` e `JARVIS_TLS_CERT/KEY` no `.env`. Reinicie e abra `https://<ip>:8080/mission-control/` no outro aparelho; aceite o certificado e digite o token. Sem HTTPS o microfone não funciona fora do localhost.
 
 ---
 

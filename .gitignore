@@ -3,3 +3,5 @@ server/.env
 .DS_Store
 data/logs/
 data/sessoes/
+server/certs/
+data/fontes.json

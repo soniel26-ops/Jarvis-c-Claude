@@ -112,6 +112,8 @@ Configuração por variáveis de ambiente (ou `server/.env`):
 | `JARVIS_WEB_SEARCH` | `1` | ferramenta de busca na web (`web_search`). `0` desliga |
 | `ELEVENLABS_API_KEY` + `ELEVENLABS_VOICE_ID` | vazios | voz do JARVIS pelo ElevenLabs (rota `/api/tts`); sem eles, voz do navegador |
 | `TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID` | vazios | lembretes e alertas no celular, e a ferramenta `notificar_celular` |
+| `STRIPE_SECRET_KEY`, `REVENUECAT_*`, `META_*` | vazios | fontes ao vivo (seção abaixo) |
+| `JARVIS_TOKEN`, `JARVIS_HOST`, `JARVIS_TLS_*` | vazios / `127.0.0.1` | login e acesso pela rede local (seção abaixo) |
 
 O prompt de sistema está em `server/server.mjs`, na constante `SISTEMA_ESTAVEL`. Ele carrega as regras dos agentes (nenhum número fora das fontes, `INDISPONÍVEL` nunca é substituído) e é cacheado entre chamadas.
 
@@ -136,6 +138,29 @@ Por padrão o painel usa o reconhecimento de voz do navegador. Com `JARVIS_STT=o
 
 Os subagentes são subagentes reais do Claude Code em `.claude/agents/`: `desenvolvedor`, `designer`, `financeiro` e `pesquisador`, cada um com as próprias ferramentas e modelo (os dois últimos e o designer rodam em Haiku/Sonnet para custar pouco). Quando o Operador roda pelo Claude Code, ele delega com a ferramenta `Agent`. Detalhes em `agents/subagentes/README.md`.
 
+### Fontes ao vivo
+
+Sem depender do Explorador, o servidor pode coletar os números direto das APIs e gravar no `mission-data.json`, ao iniciar e a cada `JARVIS_FONTES_INTERVALO_MIN` minutos (padrão 30). Configure no `.env` o que você usa:
+
+| Fonte | Variáveis | O que preenche |
+|---|---|---|
+| Stripe | `STRIPE_SECRET_KEY` (chave restrita, só leitura) | receita de ontem, do mês e do mesmo período do mês passado; assinaturas novas e canceladas ontem; MRR calculado das assinaturas ativas; alerta de pagamentos falhados |
+| RevenueCat | `REVENUECAT_API_KEY` + `REVENUECAT_PROJECT_ID` | MRR, receita de 28 dias, assinaturas ativas, novos clientes, testes ativos, usuários ativos |
+| Meta Ads | `META_ACCESS_TOKEN` + `META_AD_ACCOUNT_ID` | gasto e ROAS de ontem, melhor e pior criativo, alerta de criativo com ROAS abaixo de 1 |
+| Qualquer JSON | `data/fontes.json` (modelo em `data/fontes.exemplo.json`) | os campos que você mapear, de qualquer painel com API |
+
+O que uma fonte não consegue medir fica `INDISPONÍVEL`; um valor real nunca é sobrescrito por indisponível. Cada bloco recebe `fonte` com o sufixo "(ao vivo)" e a data. Falhas de coleta viram alertas com o prefixo `[ao vivo]`. "Jarvis, atualiza os dados" força uma coleta agora (ferramenta `atualizar_dados`); `POST /api/fontes/coletar` faz o mesmo. O Explorador continua útil para o que não tem API (painéis via Claude no Chrome) e para os briefings em texto.
+
+### Acesso de outros dispositivos e login
+
+Por padrão o servidor responde só em `127.0.0.1`, sem login. Para usar do celular ou tablet na mesma rede:
+
+1. `JARVIS_TOKEN=<frase longa>` no `.env` (gere com `openssl rand -hex 16`). Com token, a API e os arquivos de `data/`, `conhecimento/` e `agents/` exigem login. O painel mostra uma tela de token e guarda um cookie assinado, válido por 30 dias. Cinco erros seguidos bloqueiam o endereço por 15 minutos. Scripts podem usar `Authorization: Bearer <token>`.
+2. `JARVIS_HOST=0.0.0.0`. Sem token o servidor se recusa a iniciar nesse modo.
+3. `./scripts/gerar-certificado.sh <ip-desta-máquina>` e `JARVIS_TLS_CERT` / `JARVIS_TLS_KEY` no `.env`, porque o navegador só libera o microfone fora do localhost em HTTPS. O certificado é autoassinado: aceite o aviso no outro dispositivo uma vez.
+
+Para acesso fora de casa, prefira uma rede privada como Tailscale a abrir portas no roteador.
+
 ### Como o servidor trata o Claude Fable 5.1
 
 - O prompt de sistema e a lista de ferramentas são congelados no início de cada sessão; o histórico só recebe acréscimos. Quando `mission-data.json` muda, a nova versão entra como mensagem de sistema no meio da conversa, sem editar o que já foi dito.
@@ -144,7 +169,7 @@ Os subagentes são subagentes reais do Claude Code em `.claude/agents/`: `desenv
 - Recursos beta que a API da sua conta não aceitar são desligados sozinhos no primeiro erro, e o servidor segue sem eles.
 - A sessão persiste em `data/sessoes/` (fora do Git): recarregar o painel ou reiniciar o servidor continua a mesma conversa. Ela recomeça após 60 turnos, 12 horas, ou quando você diz "nova conversa". A memória em `data/memoria.md` atravessa sessões.
 
-O servidor escuta só em `127.0.0.1` e recusa chamadas `/api/*` de outra origem. Não o exponha na internet como está.
+Por padrão o servidor escuta só em `127.0.0.1` e recusa chamadas `/api/*` de outra origem. Na rede local, use `JARVIS_TOKEN` + HTTPS (seção abaixo). Não o exponha na internet.
 
 ## 2. Ligar cada número a uma fonte real
 

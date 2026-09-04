@@ -105,7 +105,12 @@ export function interpretarHorario({ em_minutos, horario }) {
   const d = new Date(horario); if (isNaN(d)) throw new Error(`horário não reconhecido: ${horario}`); return d;
 }
 
+// Ferramentas registradas por outros módulos (ex.: fontes.mjs → atualizar_dados)
+const extras = new Map();
+export function registrarFerramentaExtra(nome, fn) { extras.set(nome, fn); }
+
 export async function executarFerramenta(nome, input) {
+  if (extras.has(nome)) return await extras.get(nome)(input || {});
   switch (nome) {
     case "ler_arquivo": {
       const abs = caminhoSeguro(input.caminho);

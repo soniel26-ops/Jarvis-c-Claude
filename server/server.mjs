@@ -15,15 +15,21 @@ import http from "node:http";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { randomUUID } from "node:crypto";
+import { randomUUID, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
+import https from "node:https";
 import Anthropic from "@anthropic-ai/sdk";
 import { capacidades, ferramentaWeb, custoEstimado, MODELO_PADRAO } from "./modelos.mjs";
-import { ROOT, ARQ, FERRAMENTAS_LOCAIS, FERRAMENTA_TELEGRAM, telegramConfigurado, notificarTelegram, executarFerramenta, lerTexto, lerDados, mtime, listarBriefings, lerLembretes, gravarLembretes } from "./ferramentas.mjs";
+import { coletarFontes, fontesConfiguradas, coletoresAtivos, FERRAMENTA_ATUALIZAR } from "./fontes.mjs";
+import { ROOT, ARQ, FERRAMENTAS_LOCAIS, FERRAMENTA_TELEGRAM, telegramConfigurado, notificarTelegram, executarFerramenta, registrarFerramentaExtra, lerTexto, lerDados, mtime, listarBriefings, lerLembretes, gravarLembretes } from "./ferramentas.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 carregarDotEnv(path.join(here, ".env"));
 
 const PORT = Number(process.env.JARVIS_PORT || 8080);
+const HOST = process.env.JARVIS_HOST || "127.0.0.1";                     // 0.0.0.0 expõe na rede local (exige JARVIS_TOKEN)
+const TOKEN = process.env.JARVIS_TOKEN || "";                             // com token, toda a API e os dados exigem login
+const TLS = { cert: process.env.JARVIS_TLS_CERT || "", key: process.env.JARVIS_TLS_KEY || "" }; // HTTPS opcional (microfone fora do localhost exige)
+const FONTES_INTERVALO_MIN = Number(process.env.JARVIS_FONTES_INTERVALO_MIN || 30);
 const MODEL = process.env.JARVIS_MODEL || MODELO_PADRAO;                 // conversa do dia a dia
 const MODEL_BRIEFING = process.env.JARVIS_MODEL_BRIEFING || MODEL;       // resumo matinal (pode ser um modelo mais forte)
 const STT = { modo: (process.env.JARVIS_STT || "navegador").toLowerCase(),  // navegador | openai | local
@@ -99,7 +105,7 @@ function novaSessao(id, model = MODEL) {
       { type: "text", text: SISTEMA_ESTAVEL, cache_control: { type: "ephemeral" } },
       { type: "text", text: `${blocoMemoria()}\n\n${blocoContexto()}\n\n${blocoDados()}` },
     ],
-    tools: [...FERRAMENTAS_LOCAIS, ...(telegramConfigurado() ? [FERRAMENTA_TELEGRAM] : []), ...(recursos.webSearch ? [ferramentaWeb(model)] : [])],
+    tools: [...FERRAMENTAS_LOCAIS, ...(telegramConfigurado() ? [FERRAMENTA_TELEGRAM] : []), ...(fontesConfiguradas() ? [FERRAMENTA_ATUALIZAR] : []), ...(recursos.webSearch ? [ferramentaWeb(model)] : [])],
     messages: [],
   };
   sessoes.set(id, s); return s;
@@ -197,6 +203,52 @@ async function conversar(s, textoUsuario, emitir) {
   }
   return { uso, modelo, ferramentasUsadas, texto: textoFinal, truncado };
 }
+
+// =====================================================================
+// 4b. FONTES AO VIVO: coleta periódica + ferramenta "atualizar_dados"
+// =====================================================================
+registrarFerramentaExtra("atualizar_dados", async () => {
+  const r = await coletarFontes({ log: console.log });
+  if (!r.ok) return `Não foi possível atualizar: ${r.motivo}${r.falhas?.length ? " (" + r.falhas.join(", ") + ")" : ""}.`;
+  return `Dados atualizados de ${r.sucesso.join(", ")}${r.falhas.length ? "; falharam: " + r.falhas.join(", ") : ""}. ${r.alertas.length} alerta(s). O painel recarrega sozinho.`;
+});
+if (fontesConfiguradas()) {
+  setTimeout(() => coletarFontes().catch(e => console.warn("[fontes]", e.message)), 3000);
+  if (FONTES_INTERVALO_MIN > 0) setInterval(() => coletarFontes().catch(e => console.warn("[fontes]", e.message)), FONTES_INTERVALO_MIN * 60000);
+}
+
+// =====================================================================
+// 4c. AUTENTICAÇÃO (opcional): token → cookie assinado
+// - sem JARVIS_TOKEN: só localhost, sem login (como antes)
+// - com JARVIS_TOKEN: /api/* e os arquivos de data/ exigem cookie ou Authorization: Bearer <token>
+// =====================================================================
+const authAtiva = () => Boolean(TOKEN);
+const COOKIE = "jarvis_sessao";
+const assinar = nonce => createHmac("sha256", TOKEN).update(nonce).digest("hex");
+function cookieValido(req) {
+  const m = /(?:^|;\s*)jarvis_sessao=([A-Za-z0-9]+)\.([a-f0-9]{64})/.exec(req.headers.cookie || ""); if (!m) return false;
+  const esperado = Buffer.from(assinar(m[1])); const dado = Buffer.from(m[2]);
+  return esperado.length === dado.length && timingSafeEqual(esperado, dado);
+}
+function tokenIgual(t) { const a = Buffer.from(String(t || "")); const b = Buffer.from(TOKEN); return a.length === b.length && timingSafeEqual(a, b); }
+function autenticado(req) {
+  if (!authAtiva()) return true;
+  const bearer = /^Bearer\s+(.+)$/.exec(req.headers.authorization || "");
+  return cookieValido(req) || (bearer && tokenIgual(bearer[1].trim()));
+}
+const tentativas = new Map(); // ip → { n, ate }
+function loginPermitido(ip) { const t = tentativas.get(ip); return !(t && t.n >= 5 && Date.now() < t.ate); }
+function registrarFalhaLogin(ip) { const t = tentativas.get(ip) || { n: 0, ate: 0 }; t.n++; if (t.n >= 5) t.ate = Date.now() + 15 * 60000; tentativas.set(ip, t); }
+function apiLogin(req, res, body) {
+  const ip = req.socket.remoteAddress || "?";
+  if (!loginPermitido(ip)) return enviarJson(res, 429, { erro: "Muitas tentativas. Espere 15 minutos." });
+  if (!tokenIgual(body?.token)) { registrarFalhaLogin(ip); return enviarJson(res, 401, { erro: "Token incorreto." }); }
+  tentativas.delete(ip);
+  const nonce = randomBytes(16).toString("hex");
+  res.setHeader("Set-Cookie", `${COOKIE}=${nonce}.${assinar(nonce)}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${30 * 86400}${TLS.cert ? "; Secure" : ""}`);
+  return enviarJson(res, 200, { ok: true });
+}
+function apiLogout(res) { res.setHeader("Set-Cookie", `${COOKIE}=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0`); return enviarJson(res, 200, { ok: true }); }
 
 // =====================================================================
 // 5. EVENTOS PROATIVOS (SSE): lembretes e dados novos
@@ -305,20 +357,24 @@ async function apiTts(res, texto) {
 
 const PEDIDO_BRIEFING = `Faça o resumo matinal falado, em até duzentas e cinquenta palavras, nesta ordem: cumprimento curto; itens urgentes de alertas, se houver; receita de ontem, acumulado do mês e comparação com o mês passado; anúncios com melhor e pior criativo; tráfego e variações; e-mail com resolvidos, rascunhos e escalados; situação do objetivo principal; lembretes pendentes de hoje, se houver. Depois diga "As três recomendações do Conselheiro" e leia as três com ação, evidência e o que acontece se ignorar. Termine lendo as pendências de sete dias, se existirem. Se houver um briefing do Explorador de hoje em data/briefings, leia-o antes e use os detalhes dele. Prosa corrida, pronta para voz.`;
 
-const server = http.createServer(async (req, res) => {
+const tratador = async (req, res) => {
   const url = (req.url || "/").split("?")[0];
   try {
     if (url.startsWith("/api/")) {
       const origem = req.headers.origin; const host = req.headers.host;
       if (origem && host && new URL(origem).host !== host) return enviarJson(res, 403, { erro: "origem não permitida" });
+      if (url === "/api/login" && req.method === "POST") return apiLogin(req, res, await lerJson(req));
+      if (url === "/api/logout" && req.method === "POST") return apiLogout(res);
+      if (!autenticado(req)) return enviarJson(res, 401, { erro: "login necessário", auth: true });
       if (url === "/api/health" && req.method === "GET")
-        return enviarJson(res, 200, { ok: true, configured: temCredencial, model: MODEL, modelBriefing: MODEL_BRIEFING, stt: sttConfigurado() ? STT.modo : "navegador", effort: EFFORT, tools: FERRAMENTAS_LOCAIS.map(t => t.name).concat(telegramConfigurado() ? ["notificar_celular"] : [], recursos.webSearch ? ["web_search"] : []), streaming: true, tts: ttsConfigurado(), telegram: telegramConfigurado(), dataFile: fs.existsSync(ARQ.dados) });
+        return enviarJson(res, 200, { ok: true, auth: authAtiva(), fontes: coletoresAtivos().map(c => c.nome), configured: temCredencial, model: MODEL, modelBriefing: MODEL_BRIEFING, stt: sttConfigurado() ? STT.modo : "navegador", effort: EFFORT, tools: FERRAMENTAS_LOCAIS.map(t => t.name).concat(telegramConfigurado() ? ["notificar_celular"] : [], fontesConfiguradas() ? ["atualizar_dados"] : [], recursos.webSearch ? ["web_search"] : []), streaming: true, tts: ttsConfigurado(), telegram: telegramConfigurado(), dataFile: fs.existsSync(ARQ.dados) });
       if (url === "/api/eventos" && req.method === "GET") { abrirSSE(res); clientesSSE.add(res); req.on("close", () => clientesSSE.delete(res)); return; }
       if (req.method !== "POST") return enviarJson(res, 405, { erro: "use POST" });
       if (!temCredencial) return enviarJson(res, 503, { erro: "Sem credencial. Defina ANTHROPIC_API_KEY em server/.env (veja .env.example)." });
       const body = url === "/api/stt" ? await lerBruto(req) : await lerJson(req);
       if (url === "/api/session/reset") { const id = idSeguro(String(body.sessionId || "")); if (id) apagarSessao(id); return enviarJson(res, 200, { ok: true }); }
       if (url === "/api/tts") return await apiTts(res, String(body.texto || ""));
+      if (url === "/api/fontes/coletar") { const r = await coletarFontes({ log: console.log }); return enviarJson(res, r.ok ? 200 : 503, r); }
       if (url === "/api/stt") return await apiStt(res, body);
       if (url !== "/api/chat" && url !== "/api/briefing") return enviarJson(res, 404, { erro: "rota desconhecida" });
       const texto = url === "/api/briefing" ? PEDIDO_BRIEFING : String(body.message ?? "").trim();
@@ -339,15 +395,22 @@ const server = http.createServer(async (req, res) => {
       }
       return res.end();
     }
+    if (authAtiva() && /^\/(data|conhecimento|agents)\//.test(url) && !autenticado(req)) { res.writeHead(401); return res.end("login necessário"); }
     return servirArquivo(res, url);
   } catch (e) {
     const m = mensagemDeErro(e); console.error(`[jarvis] ${req.method} ${url} → ${m.status}: ${m.erro}`);
     if (!res.headersSent) return enviarJson(res, m.status, { erro: m.erro }); res.end();
   }
-});
+};
+if (HOST !== "127.0.0.1" && HOST !== "localhost" && !authAtiva()) { console.error(`✘ JARVIS_HOST=${HOST} expõe o servidor na rede; isso exige JARVIS_TOKEN no .env. Abortando.`); process.exit(1); }
+if (authAtiva() && TOKEN.length < 12) console.warn("⚠ JARVIS_TOKEN muito curto; use pelo menos 12 caracteres (ex.: openssl rand -hex 16)");
+const usarTls = Boolean(TLS.cert && TLS.key);
+const server = usarTls ? https.createServer({ cert: fs.readFileSync(TLS.cert), key: fs.readFileSync(TLS.key) }, tratador) : http.createServer(tratador);
+const ESQUEMA = usarTls ? "https" : "http";
 
-server.listen(PORT, "127.0.0.1", () => {
-  console.log(`JARVIS online em http://localhost:${PORT}/mission-control/`);
+server.listen(PORT, HOST, () => {
+  console.log(`JARVIS online em ${ESQUEMA}://localhost:${PORT}/mission-control/${HOST !== "127.0.0.1" ? `  (e na rede local: ${ESQUEMA}://<ip-desta-máquina>:${PORT}/mission-control/)` : ""}`);
+  console.log(`  acesso: ${authAtiva() ? "com login (JARVIS_TOKEN)" : "sem login, só nesta máquina"}${usarTls ? " · HTTPS" : ""} · fontes ao vivo: ${fontesConfiguradas() ? coletoresAtivos().map(c => c.nome).join(", ") + " (a cada " + FONTES_INTERVALO_MIN + " min)" : "nenhuma (Explorador alimenta os dados)"}`);
   console.log(`  modelo: ${MODEL}${MODEL_BRIEFING !== MODEL ? " · resumo matinal: " + MODEL_BRIEFING : ""} · effort: ${EFFORT} · fallbacks: ${recursos.fallbacks && capacidades(MODEL).fallbacks ? "ativos" : "n/a"} · web search: ${recursos.webSearch ? "ativa" : "desligada"}`);
   console.log(`  transcrição: ${sttConfigurado() ? STT.modo : "navegador"}${STT.modo !== "navegador" && !sttConfigurado() ? " (JARVIS_STT=" + STT.modo + " mas falta " + (STT.modo === "openai" ? "OPENAI_API_KEY" : "WHISPER_CMD") + ")" : ""}`);
   console.log(`  ferramentas locais: ${FERRAMENTAS_LOCAIS.map(t => t.name).join(", ")}${telegramConfigurado() ? ", notificar_celular" : ""}`);

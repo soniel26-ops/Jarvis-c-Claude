@@ -157,6 +157,14 @@ button.active{background:var(--cyan);color:var(--bg)}
 #btn-handsfree.active{animation:hf 1.6s infinite}
 @keyframes hf{0%,100%{box-shadow:0 0 4px var(--cyan-dim)}50%{box-shadow:0 0 14px var(--cyan)}}
 #reply.streaming::after{content:"▌";color:var(--cyan);animation:blink 1s infinite}
+#login{position:fixed;inset:0;z-index:60;display:flex;align-items:center;justify-content:center;background:rgba(5,11,22,.85);backdrop-filter:blur(3px)}
+#login[hidden]{display:none}
+#login-form{width:360px;gap:10px}
+#login-form p{font-size:9px;color:var(--text-dim);text-transform:none;letter-spacing:.03em;line-height:1.5}
+#login-form code{color:var(--cyan)}
+#login-form input{font:inherit;font-size:11px;letter-spacing:.2em;color:var(--text);background:rgba(7,16,34,.65);border:1px solid var(--cyan-dim);padding:8px 10px;outline:none}
+#login-form input:focus{border-color:var(--cyan);box-shadow:var(--cyan-glow)}
+#login-erro{font-size:8.5px;color:var(--red);min-height:12px;text-transform:none}
 </style>
 </head>
 <body class="boot">
@@ -243,6 +251,17 @@ button.active{background:var(--cyan);color:var(--bg)}
       </div>
     </div>
   </section>
+
+  <!-- ================= LOGIN (só quando o servidor exige token) ================= -->
+  <div id="login" hidden>
+    <form id="login-form" class="panel">
+      <h2>Acesso restrito <span>JARVIS_TOKEN</span></h2>
+      <p>Este servidor exige o token definido no <code>server/.env</code>.</p>
+      <input id="login-token" type="password" placeholder="TOKEN" autocomplete="current-password">
+      <button type="submit">Entrar</button>
+      <div id="login-erro"></div>
+    </form>
+  </div>
 
   <!-- ================= ENTRADA DE TEXTO ================= -->
   <div id="input-row">
@@ -746,8 +765,11 @@ async function novaConversa(){
 async function detectarBackend(){
   if (!/^https?:/.test(location.protocol)) return;
   try {
-    const r = await fetch(CONFIG.backend.health, {cache:"no-store"}); if (!r.ok) throw new Error(r.status);
+    const r = await fetch(CONFIG.backend.health, {cache:"no-store"});
+    if (r.status === 401){ mostrarLogin(); return; }
+    if (!r.ok) throw new Error(r.status);
     const h = await r.json();
+    if (h.fontes && h.fontes.length) log("diag", `fontes ao vivo: ${h.fontes.join(", ")}`);
     if (h.configured){ cerebro.modo = "claude"; cerebro.modelo = h.model; cerebro.tts = !!h.tts; cerebro.stt = h.stt || "navegador";
       if (cerebro.stt !== "navegador") log("diag", `transcrição: Whisper (${cerebro.stt}) via servidor local`);
       if (h.tts) log("diag", "voz: ElevenLabs via servidor local"); if (h.telegram) log("diag", "notificações no celular: Telegram ativo");
@@ -764,6 +786,18 @@ let filaFala = Promise.resolve();
 function enfileirarFala(texto){ const t = texto.trim(); if (!t) return filaFala; filaFala = filaFala.then(()=>say(t, {log:false, manterTexto:true})).catch(()=>{}); return filaFala; }
 
 /* ---- chamada em streaming (SSE via POST). Fala frase a frase; devolve o texto completo. ---- */
+function mostrarLogin(){ $("#login").hidden = false; setTimeout(()=>$("#login-token").focus(), 50); log("diag", "servidor exige token · aguardando login", "warn"); }
+$("#login-form").addEventListener("submit", async e=>{
+  e.preventDefault(); const token = $("#login-token").value.trim(); if (!token) return;
+  try {
+    const r = await fetch("/api/login", {method:"POST", headers:{"content-type":"application/json"}, body: JSON.stringify({token})});
+    const j = await r.json().catch(()=>({}));
+    if (!r.ok){ $("#login-erro").textContent = j.erro || `HTTP ${r.status}`; return; }
+    $("#login").hidden = true; $("#login-token").value = ""; log("telemetry", "Login aceito", "ai");
+    await Promise.all([loadLiveData(), detectarBackend()]);
+  } catch(err){ $("#login-erro").textContent = "Sem resposta do servidor."; }
+});
+
 async function chamarBackendStream(url, body, {aoStatus}={}){
   const ctl = new AbortController(); const t = setTimeout(()=>ctl.abort(), CONFIG.backend.timeoutMs);
   let buffer = "", completo = "", pendente = "", recusado = false, done = null;
@@ -777,6 +811,7 @@ async function chamarBackendStream(url, body, {aoStatus}={}){
   };
   try {
     const r = await fetch(url, {method:"POST", headers:{"content-type":"application/json"}, body: JSON.stringify(body||{}), signal: ctl.signal});
+    if (r.status === 401){ mostrarLogin(); throw new Error("login necessário"); }
     if (!r.ok){ const j = await r.json().catch(()=>({})); throw new Error(j.erro || `HTTP ${r.status}`); }
     const reader = r.body.getReader(), dec = new TextDecoder();
     while (true){

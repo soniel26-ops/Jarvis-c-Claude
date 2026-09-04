@@ -1,0 +1,15 @@
+{
+  "_comentario": "Copie para data/fontes.json. Cada fonte é uma URL que devolve JSON; 'mapa' liga um campo do painel (bloco.campo) a um caminho no JSON (a.b[0].c). ${VAR} é substituído por variável de ambiente do server/.env.",
+  "fontes": [
+    {
+      "nome": "Painel interno",
+      "url": "https://meu-painel.exemplo.com/api/resumo?dia=ontem",
+      "headers": { "Authorization": "Bearer ${PAINEL_INTERNO_TOKEN}" },
+      "mapa": {
+        "trafego.cadastros": "data.cadastros_ontem",
+        "trafego.usuariosAtivos": "data.usuarios_ativos",
+        "email.novos": "data.suporte.novos"
+      }
+    }
+  ]
+}

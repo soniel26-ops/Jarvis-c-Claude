@@ -46,7 +46,15 @@ else { falha("Nenhuma credencial", "sem ela o painel funciona só em modo local"
   const stt = (process.env.JARVIS_STT || "navegador").toLowerCase();
   if (stt === "openai") process.env.OPENAI_API_KEY ? ok("Transcrição: Whisper pela API da OpenAI") : falha("JARVIS_STT=openai sem OPENAI_API_KEY");
   else if (stt === "local") { process.env.WHISPER_CMD ? ok("Transcrição: Whisper local", process.env.WHISPER_CMD) : falha("JARVIS_STT=local sem WHISPER_CMD"); try { execSync("ffmpeg -version", { stdio: "pipe" }); ok("ffmpeg encontrado (converte o áudio do navegador para WAV 16 kHz)"); } catch { aviso("ffmpeg não encontrado", "o whisper.cpp precisa de WAV; instale o ffmpeg"); } }
-  else ok("Transcrição: reconhecimento do navegador"); }
+  else ok("Transcrição: reconhecimento do navegador");
+  const host = process.env.JARVIS_HOST || "127.0.0.1", token = process.env.JARVIS_TOKEN || "";
+  if (host !== "127.0.0.1" && host !== "localhost" && !token) falha(`JARVIS_HOST=${host} sem JARVIS_TOKEN`, "expor na rede exige token; o servidor se recusa a iniciar");
+  else if (token) { token.length >= 12 ? ok(`Login por token ativo${host !== "127.0.0.1" ? " · escutando em " + host : ""}`) : aviso("JARVIS_TOKEN curto", "use 12+ caracteres: openssl rand -hex 16"); }
+  else ok("Sem login: só esta máquina (127.0.0.1)");
+  if (process.env.JARVIS_TLS_CERT || process.env.JARVIS_TLS_KEY) { (fs.existsSync(process.env.JARVIS_TLS_CERT || "") && fs.existsSync(process.env.JARVIS_TLS_KEY || "")) ? ok("HTTPS: certificado e chave encontrados") : falha("HTTPS: JARVIS_TLS_CERT/KEY apontam para arquivos inexistentes", "scripts/gerar-certificado.sh"); }
+  else if (host !== "127.0.0.1") aviso("Rede local sem HTTPS", "o microfone não funciona em http fora do localhost; rode scripts/gerar-certificado.sh");
+  const fontes = [process.env.STRIPE_SECRET_KEY && "Stripe", process.env.REVENUECAT_API_KEY && process.env.REVENUECAT_PROJECT_ID && "RevenueCat", process.env.META_ACCESS_TOKEN && process.env.META_AD_ACCOUNT_ID && "Meta Ads", fs.existsSync(path.join(ROOT, "data", "fontes.json")) && "data/fontes.json"].filter(Boolean);
+  fontes.length ? ok("Fontes ao vivo: " + fontes.join(", "), `coleta a cada ${process.env.JARVIS_FONTES_INTERVALO_MIN || 30} min`) : aviso("Nenhuma fonte ao vivo configurada", "os dados vêm do Explorador (Fase 4) ou ficam simulados"); }
 
 // ---------------------------------------------------------------- 3. arquivos
 const d = lerDados();

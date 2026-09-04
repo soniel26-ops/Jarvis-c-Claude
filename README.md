@@ -5,6 +5,7 @@ Assistente pessoal de IA que monitora receita, gerencia e-mails, publica conteú
 ```
 mission-control/index.html      tela de controle (HTML único, CSS+JS embutidos, sem dependências)
 server/server.mjs               servidor local: serve o painel e liga o cérebro ao Claude (SDK oficial)
+CHECKLIST.md                    passo a passo para deixar tudo operacional na sua máquina
 agents/explorador.md            prompt + regras da rotina do Explorador (somente leitura)
 agents/operador.md              prompt + regras do Operador (e-mail, publicação, delegação)
 agents/conselheiro.md           prompt + regras do Conselheiro (3 recomendações/dia)

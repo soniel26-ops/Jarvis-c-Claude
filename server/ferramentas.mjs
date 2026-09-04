@@ -65,6 +65,24 @@ export const FERRAMENTAS_LOCAIS = [
 ];
 export const FERRAMENTA_WEB = { type: "web_search_20260209", name: "web_search", max_uses: 3 };
 
+// Notificação no celular (Telegram). Só entra na lista de ferramentas quando TELEGRAM_BOT_TOKEN e TELEGRAM_CHAT_ID existem.
+export const FERRAMENTA_TELEGRAM = {
+  name: "notificar_celular",
+  description: "Envia uma mensagem curta para o celular do usuário pelo Telegram. Use quando ele pedir para mandar algo para o celular, ou para avisar de algo que ele precisa ver longe do painel. Texto simples, sem markdown.",
+  input_schema: { type: "object", properties: { texto: { type: "string" } }, required: ["texto"] },
+};
+export function telegramConfigurado() { return Boolean(process.env.TELEGRAM_BOT_TOKEN && process.env.TELEGRAM_CHAT_ID); }
+export async function notificarTelegram(texto) {
+  if (!telegramConfigurado()) throw new Error("Telegram não configurado (TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID)");
+  const base = process.env.TELEGRAM_API_BASE || "https://api.telegram.org";
+  const r = await fetch(`${base}/bot${process.env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ chat_id: process.env.TELEGRAM_CHAT_ID, text: String(texto).slice(0, 4000), disable_web_page_preview: true }),
+  });
+  if (!r.ok) throw new Error(`Telegram HTTP ${r.status}: ${(await r.text()).slice(0, 200)}`);
+  return "Mensagem enviada ao celular.";
+}
+
 function caminhoSeguro(rel) {
   const limpo = String(rel || "").replace(/^\.?\//, "").replace(/\\/g, "/");
   if (!LEITURA_PERMITIDA.some(r => r.test(limpo)) || limpo.includes("..")) throw new Error(`leitura não permitida: ${limpo}`);
@@ -149,6 +167,7 @@ export async function executarFerramenta(nome, input) {
       if (!mud.length) return "Nenhum campo informado; nada alterado.";
       gravarJson(ARQ.dados, d); return `Objetivo atualizado: ${mud.join(", ")}. O painel recarrega os dados sozinho.`;
     }
+    case "notificar_celular": { if (!input.texto) throw new Error("texto obrigatório"); return await notificarTelegram(`JARVIS: ${input.texto}`); }
     default: throw new Error(`ferramenta desconhecida: ${nome}`);
   }
 }

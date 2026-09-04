@@ -88,6 +88,8 @@ No rodapé do painel o selo **CÉREBRO** mostra `LOCAL` ou `CLAUDE · <modelo>`.
 | "Adiciona ao FAQ: quando perguntarem sobre parcelamento, responda que..." | acrescenta a entrada FAQ-00N em `conhecimento/faq.md` |
 | "Muda a meta para quarenta mil até março." | atualiza alvo e prazo no `mission-data.json`; o painel recarrega |
 | "Como está o tempo em Paris?" / "Qual a cotação do euro?" | busca na web pela ferramenta da Anthropic e diz de quando é a informação |
+| "Manda isso pro meu celular." | envia pelo Telegram, se configurado |
+| "Nova conversa." | recomeça a sessão; a memória em `data/memoria.md` permanece |
 
 Tudo o que ele grava fica em arquivos versionados neste repositório. Ele não envia e-mail, não publica, não gasta e não altera receita ou anúncios; isso continua com o Operador e o Explorador, mediante sua aprovação.
 
@@ -106,6 +108,8 @@ Configuração por variáveis de ambiente (ou `server/.env`):
 | `JARVIS_NOME_USUARIO` | `senhor` | como o Jarvis se dirige a você |
 | `JARVIS_FALLBACKS` | `1` | fallback automático do servidor da Anthropic se o modelo recusar (beta). `0` desliga |
 | `JARVIS_WEB_SEARCH` | `1` | ferramenta de busca na web (`web_search`). `0` desliga |
+| `ELEVENLABS_API_KEY` + `ELEVENLABS_VOICE_ID` | vazios | voz do JARVIS pelo ElevenLabs (rota `/api/tts`); sem eles, voz do navegador |
+| `TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID` | vazios | lembretes e alertas no celular, e a ferramenta `notificar_celular` |
 
 O prompt de sistema está em `server/server.mjs`, na constante `SISTEMA_ESTAVEL`. Ele carrega as regras dos agentes (nenhum número fora das fontes, `INDISPONÍVEL` nunca é substituído) e é cacheado entre chamadas.
 
@@ -115,7 +119,7 @@ O prompt de sistema está em `server/server.mjs`, na constante `SISTEMA_ESTAVEL`
 - Os blocos de raciocínio do modelo são devolvidos intactos a cada turno. Se a API rejeitar um bloco, o servidor pede para descartá-lo em vez de falhar e, como última saída, remove os blocos e repete.
 - Fallback de recusa ativo por padrão: se o classificador recusar, a API reexecuta em outro modelo na mesma chamada.
 - Recursos beta que a API da sua conta não aceitar são desligados sozinhos no primeiro erro, e o servidor segue sem eles.
-- A sessão recomeça após 60 turnos ou 12 horas. Cada carga do painel abre uma sessão nova; a memória em `data/memoria.md` é o que atravessa sessões.
+- A sessão persiste em `data/sessoes/` (fora do Git): recarregar o painel ou reiniciar o servidor continua a mesma conversa. Ela recomeça após 60 turnos, 12 horas, ou quando você diz "nova conversa". A memória em `data/memoria.md` atravessa sessões.
 
 O servidor escuta só em `127.0.0.1` e recusa chamadas `/api/*` de outra origem. Não o exponha na internet como está.
 
@@ -156,6 +160,6 @@ Se preferir não dar acesso de escrita ao repositório, aponte os agentes para u
 
 ## 6. Limitações conhecidas
 
-- Sem o servidor local, o painel responde por regras simples sobre o objeto de dados. Com o servidor (seção 1b), quem responde é o Claude. A voz britânica do ElevenLabs ainda exige uma rota própria no servidor; a chave nunca deve ir para o HTML.
+- Sem o servidor local, o painel responde por regras simples sobre o objeto de dados. Com o servidor (seção 1b), quem responde é o Claude. A voz do ElevenLabs passa pela rota `/api/tts` do servidor; a chave nunca vai para o HTML.
 - A saudação falada na inicialização pode ser bloqueada pelo navegador até o primeiro clique (política de autoplay). O texto aparece de qualquer forma.
 - Os dados incluídos são simulados e servem para demonstrar o painel. O selo no rodapé deixa isso explícito.

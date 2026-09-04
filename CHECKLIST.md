@@ -106,12 +106,12 @@ Hoje os três agentes são prompts prontos em `agents/`. Eles só coletam e escr
 - [ ] **Revisar `data/memoria.md` mensalmente**: apagar o que ficou errado ou velho.
 - [ ] **Revogar e recriar a chave** se ela vazar em qualquer lugar (log, captura de tela, commit).
 
-## Fase 7 · Melhorias ainda não construídas (opcional, cada uma é um pedido separado)
+## Fase 7 · Extras (opcionais; os três primeiros já estão prontos, só precisam de configuração)
 
-- [ ] Voz britânica via ElevenLabs: nova rota no servidor que gera o áudio com a chave do ElevenLabs e o painel toca o áudio em vez da síntese do navegador.
+- [ ] **Voz do JARVIS pelo ElevenLabs (pronto).** Em elevenlabs.io: Profile → API Keys; na Voice Library escolha uma voz britânica e copie o Voice ID. No `server/.env`: `ELEVENLABS_API_KEY` e `ELEVENLABS_VOICE_ID` (opcional `ELEVENLABS_MODEL`, padrão `eleven_flash_v2_5`). Reinicie o servidor: o terminal mostra `voz: ElevenLabs`. Se o áudio falhar, o painel volta sozinho à voz do navegador e registra no DIAGNÓSTICO. Custo: o ElevenLabs cobra por caractere; comece no plano gratuito.
+- [ ] **Notificações no celular pelo Telegram (pronto).** Fale com o @BotFather no Telegram, crie um bot e copie o token. Mande "oi" ao seu bot, depois abra `https://api.telegram.org/bot<TOKEN>/getUpdates` e copie o `chat.id`. No `.env`: `TELEGRAM_BOT_TOKEN` e `TELEGRAM_CHAT_ID`. A partir daí: lembretes vencidos e alertas do Explorador (só com dados REAIS) chegam no celular, e "Jarvis, manda isso pro meu celular" usa a ferramenta `notificar_celular`.
+- [x] **Sessão persistente (pronto).** A conversa sobrevive a recargas do painel e reinícios do servidor (`data/sessoes/`, fora do Git). Diga "nova conversa" para recomeçar. A sessão ainda recomeça sozinha após 60 turnos ou 12 horas.
 - [ ] Reconhecimento de voz melhor (Whisper local ou API) para ambientes barulhentos.
-- [ ] Notificação no celular quando um lembrete vence ou o Explorador reporta alerta (Telegram, Pushover ou e-mail).
-- [ ] Sessão persistente entre recargas (salvar o histórico em disco).
 - [ ] Subagentes adicionais do Operador (`agents/subagentes/`): designer, financeiro.
 - [ ] Ligar o painel a fontes ao vivo sem depender do arquivo (por exemplo o servidor consultar Stripe/RevenueCat direto por API).
 - [ ] Autenticação no servidor, se um dia quiser acessar de outro dispositivo da casa.

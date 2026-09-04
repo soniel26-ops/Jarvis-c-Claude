@@ -635,7 +635,7 @@ function startListening(){
   if (listening) return;
   if (maosLivres.recog){ try { maosLivres.recog.onend = null; maosLivres.recog.stop(); } catch(_){} maosLivres.recog = null; }
   if (!SR){ say("Reconhecimento de voz não está disponível neste navegador. Use o campo de texto."); return; }
-  try { speechSynthesis.cancel(); } catch(_){}
+  pararFala();
   recog = new SR(); recog.lang = CONFIG.idiomaVoz; recog.interimResults = false; recog.maxAlternatives = 1;
   recog.onresult = e => { const txt = e.results[0][0].transcript; handleInput(txt); };
   recog.onerror = e => { log("diag", `voz: ${e.error}`, "warn"); stopListening(); if (e.error==="not-allowed") say("Preciso de permissão para usar o microfone."); };
@@ -655,6 +655,7 @@ if ("speechSynthesis" in window){ pickVoice(); speechSynthesis.onvoiceschanged =
 function say(text, {log:doLog=true, manterTexto=false}={}){
   if (!manterTexto) $("#reply").textContent = text;
   if (doLog) log("telemetry", "JARVIS: " + text, "ai");
+  if (cerebro.tts) return falarElevenLabs(text).catch(e=>{ log("diag", `ElevenLabs falhou (${e.message}) · voz do navegador`, "warn"); cerebro.tts = false; return say(text, {log:false, manterTexto:true}); });
   if (!("speechSynthesis" in window)) return Promise.resolve();
   return new Promise(res=>{
     const u = new SpeechSynthesisUtterance(speakable(text));
@@ -666,6 +667,20 @@ function say(text, {log:doLog=true, manterTexto=false}={}){
   });
 }
 
+/* ---- voz do ElevenLabs: o servidor gera o áudio (a chave fica nele); o painel só toca ---- */
+async function falarElevenLabs(text){
+  const r = await fetch("/api/tts", {method:"POST", headers:{"content-type":"application/json"}, body: JSON.stringify({texto: speakable(text)})});
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  const blob = await r.blob(); if (!blob.size) throw new Error("áudio vazio");
+  const url = URL.createObjectURL(blob);
+  return new Promise((res, rej)=>{
+    const a = new Audio(url); audioAtual = a;
+    let done = false; const fim = ok => ()=>{ if (done) return; done = true; URL.revokeObjectURL(url); if (audioAtual === a) audioAtual = null; if (jarvis.state === "speaking") setState("idle"); ok ? res() : rej(new Error("reprodução falhou")); };
+    a.onplay = ()=>setState("speaking"); a.onended = fim(true); a.onerror = fim(false); a.onpause = ()=>{ if (a.ended || a.currentTime === 0) return; fim(true)(); };
+    a.play().catch(()=>fim(false)());   // sem gesto do usuário o navegador pode bloquear; cai para a voz do navegador
+  });
+}
+
 /* =====================================================================
    12. CÉREBRO LOCAL
    ---------------------------------------------------------------------
@@ -673,14 +688,21 @@ function say(text, {log:doLog=true, manterTexto=false}={}){
    (Claude) substitua `responder` por uma chamada ao SEU backend — nunca
    coloque chaves de API neste arquivo, ele roda no navegador.
    ===================================================================== */
-const cerebro = { modo: "local", modelo: null, historico: [], sessionId: (crypto.randomUUID ? crypto.randomUUID() : "s"+Date.now()), eventos: null };   // modo: local · claude
+function sessaoGuardada(){ try { const v = localStorage.getItem("jarvis.sessionId"); if (v && /^[A-Za-z0-9_-]{1,64}$/.test(v)) return v; } catch(_){} return null; }
+function novoIdSessao(){ const id = (crypto.randomUUID ? crypto.randomUUID() : "s"+Date.now().toString(36)+Math.random().toString(36).slice(2,8)); try { localStorage.setItem("jarvis.sessionId", id); } catch(_){} return id; }
+const cerebro = { modo: "local", modelo: null, historico: [], sessionId: sessaoGuardada() || novoIdSessao(), eventos: null, tts: false };   // modo: local · claude
+async function novaConversa(){
+  try { await fetch("/api/session/reset", {method:"POST", headers:{"content-type":"application/json"}, body: JSON.stringify({sessionId: cerebro.sessionId})}); } catch(_){}
+  cerebro.sessionId = novoIdSessao(); log("telemetry", "Nova conversa iniciada (sessão " + cerebro.sessionId.slice(0,8) + ")", "ai");
+}
 
 async function detectarBackend(){
   if (!/^https?:/.test(location.protocol)) return;
   try {
     const r = await fetch(CONFIG.backend.health, {cache:"no-store"}); if (!r.ok) throw new Error(r.status);
     const h = await r.json();
-    if (h.configured){ cerebro.modo = "claude"; cerebro.modelo = h.model;
+    if (h.configured){ cerebro.modo = "claude"; cerebro.modelo = h.model; cerebro.tts = !!h.tts;
+      if (h.tts) log("diag", "voz: ElevenLabs via servidor local"); if (h.telegram) log("diag", "notificações no celular: Telegram ativo");
       $("#brain-text").textContent = "CLAUDE · " + h.model; $("#brain-badge").classList.add("live");
       log("telemetry", `Cérebro: Claude (${h.model}, effort ${h.effort}) via servidor local`, "ai");
       if (h.tools) log("diag", `ferramentas: ${h.tools.join(", ")}`);
@@ -776,9 +798,13 @@ async function responderLocal(q){
 }
 function listRecs(){ return DADOS.recomendacoes.map((r,i)=>`${i+1}. ${r.acao}`).join(" "); }
 
+let audioAtual = null;
+function pararFala(){ try { speechSynthesis.cancel(); } catch(_){} if (audioAtual){ try { audioAtual.pause(); audioAtual.src = ""; } catch(_){} audioAtual = null; } briefingRunning = false; setState("idle"); }
+
 async function handleInput(text){
   if (!text || !text.trim()) return;
   stopListening();
+  if (/^\s*nova conversa\s*[.!]?$/i.test(text)){ log("telemetry", "VOCÊ: " + text, "user"); await novaConversa(); await say(`Conversa reiniciada, ${CONFIG.nomeUsuario}. Em que posso ajudar?`); return; }
   log("telemetry", "VOCÊ: " + text, "user");
   setState("thinking");
   const out = await responder(text.trim());
@@ -816,7 +842,7 @@ async function morningBriefing(){
   for (const p of partes){ if (!briefingRunning) break; await say(p); }
   briefingRunning = false; $("#btn-morning").classList.remove("active");
 }
-$("#btn-morning").addEventListener("click", e=>{ e.stopPropagation(); if (briefingRunning){ briefingRunning=false; speechSynthesis.cancel(); setState("idle"); } else morningBriefing(); });
+$("#btn-morning").addEventListener("click", e=>{ e.stopPropagation(); if (briefingRunning){ pararFala(); } else morningBriefing(); });
 
 /* =====================================================================
    13b. MÃOS LIVRES · escuta contínua com palavra de ativação
@@ -847,7 +873,7 @@ function reiniciarEscutaContinua(){
       if (!e.results[i].isFinal) continue;
       const bruto = e.results[i][0].transcript.trim(); const t = normalizar(bruto);
       if (jarvis.state === "speaking"){
-        if (/\b(pare|para|parar|silencio|chega|cala)\b/.test(t)){ speechSynthesis.cancel(); briefingRunning = false; setState("idle"); log("telemetry", "VOCÊ: (interrupção)", "user"); }
+        if (/\b(pare|para|parar|silencio|chega|cala)\b/.test(t)){ pararFala(); log("telemetry", "VOCÊ: (interrupção)", "user"); }
         continue;   // ignora o que o microfone captou da própria voz do JARVIS
       }
       const re = new RegExp("\\b" + CONFIG.palavraDeAtivacao + "\\b[,.!?:;\\s]*", "i");
@@ -874,7 +900,7 @@ sphereC.addEventListener("click", ()=> listening ? stopListening() : startListen
 let spaceHeld = false;
 document.addEventListener("keydown", e=>{
   if (e.code==="Space" && document.activeElement !== $("#cmd") && !spaceHeld){ e.preventDefault(); spaceHeld = true; startListening(); }
-  if (e.key==="Escape"){ speechSynthesis.cancel(); briefingRunning=false; stopListening(); setState("idle"); }
+  if (e.key==="Escape"){ pararFala(); stopListening(); }
 });
 document.addEventListener("keyup", e=>{ if (e.code==="Space" && spaceHeld){ spaceHeld = false; stopListening(); } });
 $("#btn-send").addEventListener("click", ()=>{ const v = $("#cmd").value; $("#cmd").value=""; handleInput(v); });

@@ -8,7 +8,7 @@ $mcp = ""; if (Test-Path server\.env) { $l = Select-String -Path server\.env -Pa
 $hoje = Get-Date -Format "yyyy-MM-dd"; New-Item -ItemType Directory -Force data\logs, data\briefings | Out-Null
 try { git pull --rebase --autostash -q } catch { Write-Host "⚠ git pull falhou; seguindo com a cópia local" }
 $prompt = "Você está na raiz do repositório JARVIS ($(Get-Location)). Hoje é $hoje. Você é o agente '$Agente'. Leia o arquivo agents/$Agente.md inteiro e siga-o integralmente: colete o que ele pede usando os conectores disponíveis e grave os arquivos exatamente nos caminhos e formatos que ele indica (data/briefings/$hoje-$Agente.md e os campos de data/mission-data.json que pertencem a você). Não altere nenhum outro arquivo. Se um conector não estiver disponível, escreva INDISPONÍVEL onde couber e registre a falha em alertas. Ao terminar, imprima o relatório final."
-$perm = "Read,Write,Edit,Glob,Grep,Bash(ls:*),Bash(cat:*),Bash(date:*)"; if ($mcp) { $perm += ",$mcp" }
+$perm = "Read,Write,Edit,Glob,Grep,Agent,WebSearch,WebFetch,Bash(ls:*),Bash(cat:*),Bash(date:*),Bash(git:*),Bash(node:*)"; if ($mcp) { $perm += ",$mcp" }
 Write-Host "→ $Agente · $hoje · ferramentas: $perm"
 claude -p $prompt --allowedTools $perm --output-format text 2>&1 | Tee-Object -FilePath "data\logs\$hoje-$Agente.log"
 & powershell -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "sincronizar.ps1")

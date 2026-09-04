@@ -12,14 +12,14 @@ import path from "node:path";
 import { execSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import Anthropic from "@anthropic-ai/sdk";
-import { ROOT, ARQ, FERRAMENTAS_LOCAIS, FERRAMENTA_WEB, executarFerramenta, lerDados } from "./ferramentas.mjs";
+import { ROOT, ARQ, FERRAMENTAS_LOCAIS, executarFerramenta, lerDados } from "./ferramentas.mjs";
+import { capacidades, ferramentaWeb, custoEstimado, MODELO_PADRAO, PRECO } from "./modelos.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 carregarDotEnv(path.join(here, ".env"));
 const SEM_API = process.argv.includes("--sem-api");
-const MODEL = process.env.JARVIS_MODEL || "claude-fable-5-1";
+const MODEL = process.env.JARVIS_MODEL || MODELO_PADRAO;
 const PORT = Number(process.env.JARVIS_PORT || 8080);
-const PRECO = { "claude-fable-5-1": [10, 50], "claude-fable-5": [10, 50], "claude-opus-5": [5, 25], "claude-opus-4-8": [5, 25], "claude-sonnet-5": [2, 10] }; // US$ por milhão (entrada, saída)
 
 const linhas = []; let falhas = 0, avisos = 0;
 const ok = (t, d = "") => linhas.push(["✔", t, d]);
@@ -41,7 +41,12 @@ const chave = process.env.ANTHROPIC_API_KEY || "";
 if (chave) { chave.startsWith("sk-ant-") ? ok("ANTHROPIC_API_KEY presente", chave.slice(0, 10) + "…" + chave.slice(-4)) : aviso("ANTHROPIC_API_KEY presente mas não começa com sk-ant-", "confira se copiou a chave inteira"); }
 else if (process.env.ANTHROPIC_AUTH_TOKEN) ok("ANTHROPIC_AUTH_TOKEN presente");
 else { falha("Nenhuma credencial", "sem ela o painel funciona só em modo local"); proximos.push("Colar a chave em server/.env → ANTHROPIC_API_KEY="); }
-ok(`Modelo configurado: ${MODEL}`, `effort ${process.env.JARVIS_EFFORT || "medium"} · web search ${(process.env.JARVIS_WEB_SEARCH ?? "1") !== "0" ? "ligada" : "desligada"} · fallbacks ${(process.env.JARVIS_FALLBACKS ?? "1") !== "0" ? "ligados" : "desligados"}`);
+{ const [pi, po] = PRECO[MODEL] || [0, 0]; (PRECO[MODEL] ? ok : aviso)(`Modelo configurado: ${MODEL}`, `US$ ${pi}/${po} por milhão de tokens (entrada/saída) · effort ${process.env.JARVIS_EFFORT || "medium"} · web search ${(process.env.JARVIS_WEB_SEARCH ?? "1") !== "0" ? "ligada" : "desligada"}${PRECO[MODEL] ? "" : " · modelo fora da tabela conhecida"}`);
+  if (process.env.JARVIS_MODEL_BRIEFING && process.env.JARVIS_MODEL_BRIEFING !== MODEL) ok(`Resumo matinal com ${process.env.JARVIS_MODEL_BRIEFING}`);
+  const stt = (process.env.JARVIS_STT || "navegador").toLowerCase();
+  if (stt === "openai") process.env.OPENAI_API_KEY ? ok("Transcrição: Whisper pela API da OpenAI") : falha("JARVIS_STT=openai sem OPENAI_API_KEY");
+  else if (stt === "local") { process.env.WHISPER_CMD ? ok("Transcrição: Whisper local", process.env.WHISPER_CMD) : falha("JARVIS_STT=local sem WHISPER_CMD"); try { execSync("ffmpeg -version", { stdio: "pipe" }); ok("ffmpeg encontrado (converte o áudio do navegador para WAV 16 kHz)"); } catch { aviso("ffmpeg não encontrado", "o whisper.cpp precisa de WAV; instale o ffmpeg"); } }
+  else ok("Transcrição: reconhecimento do navegador"); }
 
 // ---------------------------------------------------------------- 3. arquivos
 const d = lerDados();
@@ -79,14 +84,15 @@ if (SEM_API) aviso("Teste da API pulado (--sem-api)");
 else if (!chave && !process.env.ANTHROPIC_AUTH_TOKEN) aviso("Teste da API pulado", "sem credencial");
 else {
   const client = new Anthropic();
-  const ehFable = /^claude-(fable|mythos)-5/.test(MODEL), ehOpus5 = /^claude-opus-5/.test(MODEL);
-  const rec = { fallbacks: (process.env.JARVIS_FALLBACKS ?? "1") !== "0", binding: true, web: (process.env.JARVIS_WEB_SEARCH ?? "1") !== "0" };
+  const cap = capacidades(MODEL); const ehFable = cap.fable;
+  const rec = { fallbacks: (process.env.JARVIS_FALLBACKS ?? "1") !== "0" && cap.fallbacks, binding: cap.binding, web: (process.env.JARVIS_WEB_SEARCH ?? "1") !== "0" };
   const params = () => {
-    const p = { model: MODEL, max_tokens: 400, output_config: { effort: "low" }, system: "Responda apenas com a palavra: ok",
-      tools: [...FERRAMENTAS_LOCAIS, ...(rec.web ? [FERRAMENTA_WEB] : [])], messages: [{ role: "user", content: "Teste de conexão. Responda apenas: ok" }] };
+    const p = { model: MODEL, max_tokens: 400, system: "Responda apenas com a palavra: ok",
+      tools: [...FERRAMENTAS_LOCAIS, ...(rec.web ? [ferramentaWeb(MODEL)] : [])], messages: [{ role: "user", content: "Teste de conexão. Responda apenas: ok" }] };
+    if (cap.effort) p.output_config = { effort: "low" };
     const betas = [];
-    if (rec.fallbacks && (ehFable || ehOpus5)) { betas.push("server-side-fallback-2026-07-01"); p.fallbacks = "default"; }
-    if (ehFable && rec.binding) { betas.push("thinking-binding-controls-2026-08-01"); p.thinking = { type: "adaptive", block_binding: { prefix_mismatch_behavior: "drop_block" } }; }
+    if (rec.fallbacks) { betas.push("server-side-fallback-2026-07-01"); p.fallbacks = "default"; }
+    if (rec.binding) { betas.push("thinking-binding-controls-2026-08-01"); p.thinking = { type: "adaptive", block_binding: { prefix_mismatch_behavior: "drop_block" } }; }
     if (betas.length) p.betas = betas; return p;
   };
   let resp = null, t0 = Date.now();
@@ -111,11 +117,10 @@ else {
   if (resp) {
     const ms = Date.now() - t0;
     const texto = resp.content.filter(b => b.type === "text").map(b => b.text).join("").trim();
-    const u = resp.usage || {}; const [pi, po] = PRECO[resp.model] || PRECO[MODEL] || [0, 0];
-    const custo = ((u.input_tokens || 0) * pi + (u.output_tokens || 0) * po) / 1e6;
+    const u = resp.usage || {}; const custo = custoEstimado(resp.model in PRECO ? resp.model : MODEL, u);
     relatorioApi.unshift(["✔", `API respondeu com ${resp.model} em ${ms} ms`, `resposta: "${texto.slice(0, 40)}" · stop ${resp.stop_reason} · ${u.input_tokens} in / ${u.output_tokens} out · ≈ US$ ${custo.toFixed(4)}`]);
     if (resp.stop_reason === "refusal") relatorioApi.push(["⚠", "A chamada de teste foi recusada pelo classificador", "improvável em uso normal; veja stop_details no log"]);
-    relatorioApi.push([rec.fallbacks ? "✔" : "⚠", `fallbacks de recusa: ${rec.fallbacks ? "aceitos" : "indisponíveis"}`]);
+    if (cap.fallbacks) relatorioApi.push([rec.fallbacks ? "✔" : "⚠", `fallbacks de recusa: ${rec.fallbacks ? "aceitos" : "indisponíveis"}`]);
     if (ehFable) relatorioApi.push([rec.binding ? "✔" : "⚠", `controle de blocos de raciocínio: ${rec.binding ? "aceito" : "indisponível"}`]);
     relatorioApi.push([rec.web ? "✔" : "⚠", `web_search: ${rec.web ? "aceita" : "indisponível"}`]);
   }

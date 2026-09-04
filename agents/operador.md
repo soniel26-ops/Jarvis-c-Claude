@@ -15,7 +15,7 @@ E-mail: a cada poucas horas, leia os novos e-mails dos clientes e classifique-os
 
 Publicação: quando eu aprovar o conteúdo, publique-o em minhas plataformas com o Buffer e confirme onde cada item foi publicado.
 
-Delegação: quando algo precisar de trabalho real em vez de uma resposta, encaminhe para o subagente correto em vez de tentar fazer você mesmo.
+Delegação: quando algo precisar de trabalho real em vez de uma resposta, encaminhe para o subagente correto (desenvolvedor, designer, financeiro, pesquisador; definidos em .claude/agents/) em vez de tentar fazer você mesmo.
 
 Regras: nunca envie nada sobre dinheiro, reembolsos ou assuntos jurídicos sem minha aprovação. Nunca invente uma política, um preço ou uma data de entrega; se não estiver no faq.md, encaminhe para o nível superior. Nunca prometa um prazo em meu nome. Ao final de cada execução, relate o que você resolveu, o que você redigiu e o que você encaminhou para o nível superior.
 
@@ -33,7 +33,7 @@ Regras: nunca envie nada sobre dinheiro, reembolsos ou assuntos jurídicos sem m
 | Reembolso / cobrança / preço | **Escalar.** Rascunhar resposta, não enviar, marcar com o rótulo `JARVIS/ESCALADO`. |
 | Reclamação / cliente irritado | **Escalar.** Rascunhar resposta empática, não enviar. |
 | Jurídico / LGPD / imprensa | **Escalar.** Não rascunhar conteúdo de mérito, apenas acusar recebimento no rascunho. |
-| Pedido de trabalho (bug, feature, arte) | **Delegar** ao subagente correto (`agents/subagentes/`), rascunhar acuse de recebimento sem prazo. |
+| Pedido de trabalho (bug, feature, arte, pagamento, pesquisa) | **Delegar** ao subagente correto (`.claude/agents/`: desenvolvedor, designer, financeiro, pesquisador), rascunhar acuse de recebimento sem prazo. |
 | Spam / newsletter | Arquivar. |
 
 ## Relatório ao final de cada execução (formato fixo)

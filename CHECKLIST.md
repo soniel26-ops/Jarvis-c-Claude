@@ -16,7 +16,7 @@ Ele verifica Node e Git, instala, pede a chave, grava o `.env` e roda o diagnós
 - [ ] **Git.** `git --version`. Se não tiver: https://git-scm.com.
 - [ ] **Chrome ou Edge** atualizado. Firefox e Safari não têm reconhecimento de voz contínuo.
 - [ ] **Microfone e alto-falantes** funcionando (o modo mãos livres precisa dos dois).
-- [ ] **Conta na Anthropic com créditos.** https://console.anthropic.com → Billing. O Fable 5.1 é o modelo mais caro; comece com um crédito pequeno (por exemplo 20 dólares) e um limite de gasto mensal em Settings → Limits.
+- [ ] **Conta na Anthropic com créditos.** https://console.anthropic.com → Billing. O padrão agora é o Sonnet 5 (cerca de 1 centavo por pergunta); comece com um crédito pequeno (por exemplo 10 dólares) e um limite de gasto mensal em Settings → Limits.
 - [ ] **Chave de API criada** em console.anthropic.com → API Keys. Copie e guarde; ela só aparece uma vez.
 - [ ] (Recomendado) **Defina um limite de gasto** na conta antes de qualquer teste.
 
@@ -39,7 +39,7 @@ Ele verifica Node e Git, instala, pede a chave, grava o `.env` e roda o diagnós
 - [ ] Rodar o diagnóstico: `npm run doctor` (ou `npm run doctor:local` para não gastar nada). Tudo ✔ ou ⚠ antes de seguir; ✘ traz o próximo passo na própria saída.
 - [ ] Iniciar: `npm start`. O terminal deve mostrar `credencial: encontrada no ambiente`.
 - [ ] Abrir http://localhost:8080/mission-control/ no Chrome ou Edge.
-- [ ] Conferir no rodapé: selo **CÉREBRO** = `CLAUDE · claude-fable-5-1`. Se estiver `LOCAL`, veja o painel DIAGNÓSTICO e o terminal do servidor.
+- [ ] Conferir no rodapé: selo **CÉREBRO** = `CLAUDE · claude-sonnet-5` (ou o modelo que você escolheu). Se estiver `LOCAL`, veja o painel DIAGNÓSTICO e o terminal do servidor.
 - [ ] Clicar na esfera uma vez e **permitir o microfone** quando o navegador pedir.
 
 ## Fase 2 · Primeiro contato com a API real (20 min) — isto ainda não foi testado por ninguém
@@ -69,7 +69,7 @@ Faça cada pergunta pelo campo de texto e olhe o terminal do servidor depois de 
 - [ ] **Limites do Explorador.** Tabela no fim de `agents/explorador.md`: quais métricas e quais limiares disparam alerta no seu negócio.
 - [ ] **Modo do Operador.** `agents/operador.md` deve continuar em `MODO: RASCUNHO` por pelo menos uma semana.
 - [ ] **Voz.** Em `mission-control/index.html`, `CONFIG.vozPreferida` e `CONFIG.idiomaVoz`. Instale vozes pt-BR de qualidade no sistema: Windows → Configurações → Hora e idioma → Fala → Adicionar vozes; macOS → Ajustes → Acessibilidade → Conteúdo falado → Voz do sistema → Gerenciar vozes (baixe as "Aprimoradas"). Recarregue o painel e veja no DIAGNÓSTICO qual voz foi selecionada.
-- [ ] **Esforço e modelo.** Se as respostas demorarem mais do que você gosta: `JARVIS_EFFORT=low`. Se o custo pesar: `JARVIS_MODEL=claude-opus-5`. Reinicie o servidor após mudar o `.env`.
+- [ ] **Esforço e modelo.** Padrão `claude-sonnet-5`. Mais barato: `JARVIS_MODEL=claude-haiku-4-5`. Mais análise só no resumo matinal: `JARVIS_MODEL_BRIEFING=claude-opus-5`. Respostas mais rápidas: `JARVIS_EFFORT=low`. Tabela de custo no README. Reinicie o servidor após mudar o `.env`.
 - [ ] **Persona.** Se quiser mudar o tom, edite `SISTEMA_ESTAVEL` em `server/server.mjs`.
 
 ## Fase 4 · Ligar os agentes (o que ainda não roda sozinho)
@@ -111,8 +111,8 @@ Hoje os três agentes são prompts prontos em `agents/`. Eles só coletam e escr
 - [ ] **Voz do JARVIS pelo ElevenLabs (pronto).** Em elevenlabs.io: Profile → API Keys; na Voice Library escolha uma voz britânica e copie o Voice ID. No `server/.env`: `ELEVENLABS_API_KEY` e `ELEVENLABS_VOICE_ID` (opcional `ELEVENLABS_MODEL`, padrão `eleven_flash_v2_5`). Reinicie o servidor: o terminal mostra `voz: ElevenLabs`. Se o áudio falhar, o painel volta sozinho à voz do navegador e registra no DIAGNÓSTICO. Custo: o ElevenLabs cobra por caractere; comece no plano gratuito.
 - [ ] **Notificações no celular pelo Telegram (pronto).** Fale com o @BotFather no Telegram, crie um bot e copie o token. Mande "oi" ao seu bot, depois abra `https://api.telegram.org/bot<TOKEN>/getUpdates` e copie o `chat.id`. No `.env`: `TELEGRAM_BOT_TOKEN` e `TELEGRAM_CHAT_ID`. A partir daí: lembretes vencidos e alertas do Explorador (só com dados REAIS) chegam no celular, e "Jarvis, manda isso pro meu celular" usa a ferramenta `notificar_celular`.
 - [x] **Sessão persistente (pronto).** A conversa sobrevive a recargas do painel e reinícios do servidor (`data/sessoes/`, fora do Git). Diga "nova conversa" para recomeçar. A sessão ainda recomeça sozinha após 60 turnos ou 12 horas.
-- [ ] Reconhecimento de voz melhor (Whisper local ou API) para ambientes barulhentos.
-- [ ] Subagentes adicionais do Operador (`agents/subagentes/`): designer, financeiro.
+- [ ] **Whisper (pronto).** Escolha em `server/.env`: `JARVIS_STT=openai` + `OPENAI_API_KEY` (API de áudio da OpenAI, modelo `whisper-1`, cobra por minuto de áudio), ou `JARVIS_STT=local` + `WHISPER_CMD` (instale o whisper.cpp e o ffmpeg; exemplo de comando no `.env.example`). Reinicie o servidor; o terminal mostra `transcrição: openai|local`. Teste: segure ESPAÇO, fale, solte; e no mãos livres diga só "Jarvis", espere o "Sim?" e fale o comando.
+- [x] **Subagentes do Operador (pronto).** `.claude/agents/`: desenvolvedor, designer, financeiro, pesquisador. Funcionam quando o Operador roda pelo Claude Code (Fase 4, opção B). Para adicionar outro, copie um arquivo e ajuste `description`, `tools` e `model`.
 - [ ] Ligar o painel a fontes ao vivo sem depender do arquivo (por exemplo o servidor consultar Stripe/RevenueCat direto por API).
 - [ ] Autenticação no servidor, se um dia quiser acessar de outro dispositivo da casa.
 

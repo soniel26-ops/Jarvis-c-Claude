@@ -17,13 +17,19 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
 import Anthropic from "@anthropic-ai/sdk";
-import { ROOT, ARQ, FERRAMENTAS_LOCAIS, FERRAMENTA_WEB, FERRAMENTA_TELEGRAM, telegramConfigurado, notificarTelegram, executarFerramenta, lerTexto, lerDados, mtime, listarBriefings, lerLembretes, gravarLembretes } from "./ferramentas.mjs";
+import { capacidades, ferramentaWeb, custoEstimado, MODELO_PADRAO } from "./modelos.mjs";
+import { ROOT, ARQ, FERRAMENTAS_LOCAIS, FERRAMENTA_TELEGRAM, telegramConfigurado, notificarTelegram, executarFerramenta, lerTexto, lerDados, mtime, listarBriefings, lerLembretes, gravarLembretes } from "./ferramentas.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 carregarDotEnv(path.join(here, ".env"));
 
 const PORT = Number(process.env.JARVIS_PORT || 8080);
-const MODEL = process.env.JARVIS_MODEL || "claude-fable-5-1";
+const MODEL = process.env.JARVIS_MODEL || MODELO_PADRAO;                 // conversa do dia a dia
+const MODEL_BRIEFING = process.env.JARVIS_MODEL_BRIEFING || MODEL;       // resumo matinal (pode ser um modelo mais forte)
+const STT = { modo: (process.env.JARVIS_STT || "navegador").toLowerCase(),  // navegador | openai | local
+  openaiKey: process.env.OPENAI_API_KEY || "", openaiBase: process.env.OPENAI_API_BASE || "https://api.openai.com", openaiModelo: process.env.OPENAI_STT_MODEL || "whisper-1",
+  cmd: process.env.WHISPER_CMD || "", idioma: process.env.JARVIS_STT_IDIOMA || "pt" };
+const sttConfigurado = () => STT.modo === "openai" ? Boolean(STT.openaiKey) : STT.modo === "local" ? Boolean(STT.cmd) : false;
 const EFFORT = process.env.JARVIS_EFFORT || "medium";
 const NOME = process.env.JARVIS_NOME_USUARIO || "senhor";
 const MAX_ITERACOES = 8;                  // limite de rodadas de ferramentas por pergunta
@@ -34,14 +40,12 @@ const recursos = {                        // recursos opcionais; desligam sozinh
   bindingControls: true,
   webSearch: (process.env.JARVIS_WEB_SEARCH ?? "1") !== "0",
 };
-const ehFable = /^claude-(fable|mythos)-5/.test(MODEL);
 const SESSOES_DIR = path.join(ROOT, "data", "sessoes");   // sessões persistem entre recargas e reinícios (gitignored)
 const ELEVEN = {                                           // voz do ElevenLabs; sem chave, o painel usa a voz do navegador
   key: process.env.ELEVENLABS_API_KEY || "", voz: process.env.ELEVENLABS_VOICE_ID || "", modelo: process.env.ELEVENLABS_MODEL || "eleven_flash_v2_5",
   base: process.env.ELEVENLABS_API_BASE || "https://api.elevenlabs.io",
 };
 const ttsConfigurado = () => Boolean(ELEVEN.key && ELEVEN.voz);
-const ehOpus5 = /^claude-opus-5/.test(MODEL);
 
 const temCredencial = Boolean(process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_AUTH_TOKEN);
 const client = new Anthropic(); // lê ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN / perfil `ant auth login`
@@ -88,14 +92,14 @@ function blocoContexto() {
 // 2. SESSÕES (histórico só de acréscimos; system + tools congelados)
 // =====================================================================
 const sessoes = new Map();
-function novaSessao(id) {
+function novaSessao(id, model = MODEL) {
   const s = {
-    id, criadaEm: Date.now(), dadosMtime: mtime(ARQ.dados),
+    id, model, criadaEm: Date.now(), dadosMtime: mtime(ARQ.dados),
     system: [
       { type: "text", text: SISTEMA_ESTAVEL, cache_control: { type: "ephemeral" } },
       { type: "text", text: `${blocoMemoria()}\n\n${blocoContexto()}\n\n${blocoDados()}` },
     ],
-    tools: [...FERRAMENTAS_LOCAIS, ...(telegramConfigurado() ? [FERRAMENTA_TELEGRAM] : []), ...(recursos.webSearch ? [FERRAMENTA_WEB] : [])],
+    tools: [...FERRAMENTAS_LOCAIS, ...(telegramConfigurado() ? [FERRAMENTA_TELEGRAM] : []), ...(recursos.webSearch ? [ferramentaWeb(model)] : [])],
     messages: [],
   };
   sessoes.set(id, s); return s;
@@ -103,7 +107,7 @@ function novaSessao(id) {
 const idSeguro = id => /^[A-Za-z0-9_-]{1,64}$/.test(id) ? id : null;
 function arquivoSessao(id) { return path.join(SESSOES_DIR, id + ".json"); }
 function salvarSessao(s) { try { fs.mkdirSync(SESSOES_DIR, { recursive: true }); fs.writeFileSync(arquivoSessao(s.id), JSON.stringify(s)); } catch (e) { console.warn("[jarvis] não consegui salvar a sessão:", e.message); } }
-function carregarSessao(id) { try { const s = JSON.parse(fs.readFileSync(arquivoSessao(id), "utf8")); if (s && Array.isArray(s.messages) && s.system && s.tools) return s; } catch {} return null; }
+function carregarSessao(id) { try { const s = JSON.parse(fs.readFileSync(arquivoSessao(id), "utf8")); if (s && Array.isArray(s.messages) && s.system && s.tools && s.model === MODEL) return s; } catch {} return null; }  // modelo diferente → sessão nova (blocos de raciocínio são presos ao modelo)
 function apagarSessao(id) { sessoes.delete(id); try { fs.unlinkSync(arquivoSessao(id)); } catch {} }
 function obterSessao(id) {
   id = idSeguro(String(id || "")) || randomUUID();
@@ -115,17 +119,19 @@ function obterSessao(id) {
 // Se os dados mudaram desde o início da sessão, entra como mensagem de sistema (acréscimo, não edição).
 function atualizacaoDeDados(s) {
   const m = mtime(ARQ.dados); if (m === s.dadosMtime) return null;
-  s.dadosMtime = m; return { role: "system", content: `Atualização: o arquivo de dados mudou. Use esta versão a partir de agora.\n${blocoDados()}` };
+  s.dadosMtime = m; return `Atualização: o arquivo de dados mudou. Use esta versão a partir de agora.\n${blocoDados()}`;
 }
 
 // =====================================================================
 // 4. LOOP AGÊNTICO EM STREAMING
 // =====================================================================
 function paramsBase(s) {
-  const p = { model: MODEL, max_tokens: 2048, output_config: { effort: EFFORT }, system: s.system, tools: s.tools, messages: s.messages };
+  const cap = capacidades(s.model);
+  const p = { model: s.model, max_tokens: 2048, system: s.system, tools: s.tools, messages: s.messages };
+  if (cap.effort) p.output_config = { effort: EFFORT };
   const betas = [];
-  if (recursos.fallbacks && (ehFable || ehOpus5)) { betas.push("server-side-fallback-2026-07-01"); p.fallbacks = "default"; }
-  if (ehFable && recursos.bindingControls) { betas.push("thinking-binding-controls-2026-08-01"); p.thinking = { type: "adaptive", block_binding: { prefix_mismatch_behavior: "drop_block" } }; }
+  if (recursos.fallbacks && cap.fallbacks) { betas.push("server-side-fallback-2026-07-01"); p.fallbacks = "default"; }
+  if (cap.binding && recursos.bindingControls) { betas.push("thinking-binding-controls-2026-08-01"); p.thinking = { type: "adaptive", block_binding: { prefix_mismatch_behavior: "drop_block" } }; }
   if (betas.length) p.betas = betas;
   return p;
 }
@@ -147,7 +153,7 @@ async function chamarComDegradacao(s, emitir) {
       const msg = e.message || "";
       if (recursos.fallbacks && /fallback/i.test(msg)) { console.warn("[jarvis] fallbacks rejeitados; desligando:", msg); recursos.fallbacks = false; continue; }
       if (recursos.bindingControls && /binding|block_binding/i.test(msg)) { console.warn("[jarvis] binding controls rejeitados; desligando:", msg); recursos.bindingControls = false; continue; }
-      if (recursos.webSearch && /web_search/i.test(msg)) { console.warn("[jarvis] web_search rejeitado; desligando:", msg); recursos.webSearch = false; s.tools = s.tools.filter(t => t.type !== FERRAMENTA_WEB.type); continue; }
+      if (recursos.webSearch && /web_search/i.test(msg)) { console.warn("[jarvis] web_search rejeitado; desligando:", msg); recursos.webSearch = false; s.tools = s.tools.filter(t => t.name !== "web_search"); continue; }
       if (/signature|thinking/i.test(msg)) { console.warn("[jarvis] blocos de raciocínio inválidos; removendo do histórico:", msg); s.messages = semThinking(s.messages); continue; }
       throw e;
     }
@@ -156,10 +162,12 @@ async function chamarComDegradacao(s, emitir) {
 }
 
 async function conversar(s, textoUsuario, emitir) {
-  s.messages.push({ role: "user", content: textoUsuario });
-  const upd = atualizacaoDeDados(s); if (upd) s.messages.push(upd);
+  const upd = atualizacaoDeDados(s);
+  if (upd && capacidades(s.model).sistemaMeioDaConversa) { s.messages.push({ role: "user", content: textoUsuario }, { role: "system", content: upd }); }
+  else if (upd) { s.messages.push({ role: "user", content: [{ type: "text", text: upd }, { type: "text", text: textoUsuario }] }); }  // modelos sem system no meio: vai junto do turno do usuário
+  else s.messages.push({ role: "user", content: textoUsuario });
   const uso = { input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 };
-  const ferramentasUsadas = []; let textoFinal = ""; let modelo = MODEL; let truncado = false;
+  const ferramentasUsadas = []; let textoFinal = ""; let modelo = s.model; let truncado = false;
 
   for (let it = 0; it < MAX_ITERACOES; it++) {
     const msg = await chamarComDegradacao(s, emitir);
@@ -236,6 +244,14 @@ function lerJson(req) {
     req.on("error", rej);
   });
 }
+function lerBruto(req) {
+  return new Promise((res, rej) => {
+    const partes = []; let tam = 0;
+    req.on("data", c => { partes.push(c); tam += c.length; if (tam > 15e6) { rej(new Error("áudio grande demais")); req.destroy(); } });
+    req.on("end", () => res({ audio: Buffer.concat(partes), tipo: req.headers["content-type"] || "audio/webm" }));
+    req.on("error", rej);
+  });
+}
 function enviarJson(res, status, obj) { res.writeHead(status, { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" }); res.end(JSON.stringify(obj)); }
 function abrirSSE(res) { res.writeHead(200, { "Content-Type": "text/event-stream; charset=utf-8", "Cache-Control": "no-store", Connection: "keep-alive", "X-Accel-Buffering": "no" }); res.write(": ok\n\n"); return (evento, dados) => res.write(`event: ${evento}\ndata: ${JSON.stringify(dados)}\n\n`); }
 function servirArquivo(res, urlPath) {
@@ -250,6 +266,30 @@ function servirArquivo(res, urlPath) {
     fs.createReadStream(abs).pipe(res);
   });
 }
+// Transcrição (Whisper). "openai": API de áudio da OpenAI. "local": comando externo (whisper.cpp etc.) via WHISPER_CMD com {arquivo}.
+async function apiStt(res, { audio, tipo }) {
+  if (!sttConfigurado()) return enviarJson(res, 404, { erro: "transcrição não configurada (JARVIS_STT)" });
+  if (!audio || audio.length < 800) return enviarJson(res, 400, { erro: "áudio vazio" });
+  const ext = /ogg/.test(tipo) ? "ogg" : /mp4|m4a/.test(tipo) ? "m4a" : /wav/.test(tipo) ? "wav" : /mpeg|mp3/.test(tipo) ? "mp3" : "webm";
+  if (STT.modo === "openai") {
+    const fd = new FormData(); fd.append("file", new Blob([audio], { type: tipo.split(";")[0] }), `fala.${ext}`); fd.append("model", STT.openaiModelo); fd.append("language", STT.idioma); fd.append("response_format", "json");
+    const r = await fetch(`${STT.openaiBase}/v1/audio/transcriptions`, { method: "POST", headers: { authorization: `Bearer ${STT.openaiKey}` }, body: fd });
+    if (!r.ok) { const t = await r.text().catch(() => ""); console.warn(`[jarvis] stt openai ${r.status}: ${t.slice(0, 160)}`); return enviarJson(res, 502, { erro: `transcrição HTTP ${r.status}` }); }
+    const j = await r.json(); return enviarJson(res, 200, { texto: String(j.text || "").trim(), provedor: "openai" });
+  }
+  // local
+  const os = await import("node:os"); const { execFile, spawn } = await import("node:child_process");
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "jarvis-stt-")); const bruto = path.join(dir, `fala.${ext}`); fs.writeFileSync(bruto, audio);
+  let entrada = bruto;
+  const temFfmpeg = await new Promise(r => execFile("ffmpeg", ["-version"], e => r(!e)));
+  if (temFfmpeg) { const wav = path.join(dir, "fala.wav"); await new Promise((r, j) => execFile("ffmpeg", ["-y", "-loglevel", "error", "-i", bruto, "-ar", "16000", "-ac", "1", wav], e => e ? j(e) : r())).then(() => { entrada = wav; }).catch(e => console.warn("[jarvis] ffmpeg:", e.message)); }
+  const cmd = STT.cmd.replaceAll("{arquivo}", JSON.stringify(entrada)).replaceAll("{idioma}", STT.idioma);
+  const saida = await new Promise((r, j) => { const p = spawn(cmd, { shell: true }); let out = "", err = ""; p.stdout.on("data", d => out += d); p.stderr.on("data", d => err += d); p.on("close", c => c === 0 ? r(out) : j(new Error(`WHISPER_CMD saiu com ${c}: ${err.slice(0, 200)}`))); });
+  fs.rmSync(dir, { recursive: true, force: true });
+  const texto = saida.split("\n").map(l => l.replace(/^\[[^\]]*\]\s*/, "").trim()).filter(Boolean).join(" ").trim();  // remove marcas de tempo do whisper.cpp
+  return enviarJson(res, 200, { texto, provedor: "local" });
+}
+
 async function apiTts(res, texto) {
   if (!ttsConfigurado()) return enviarJson(res, 404, { erro: "ElevenLabs não configurado" });
   texto = texto.trim().slice(0, 1200); if (!texto) return enviarJson(res, 400, { erro: "texto vazio" });
@@ -272,22 +312,24 @@ const server = http.createServer(async (req, res) => {
       const origem = req.headers.origin; const host = req.headers.host;
       if (origem && host && new URL(origem).host !== host) return enviarJson(res, 403, { erro: "origem não permitida" });
       if (url === "/api/health" && req.method === "GET")
-        return enviarJson(res, 200, { ok: true, configured: temCredencial, model: MODEL, effort: EFFORT, tools: FERRAMENTAS_LOCAIS.map(t => t.name).concat(telegramConfigurado() ? ["notificar_celular"] : [], recursos.webSearch ? ["web_search"] : []), streaming: true, tts: ttsConfigurado(), telegram: telegramConfigurado(), dataFile: fs.existsSync(ARQ.dados) });
+        return enviarJson(res, 200, { ok: true, configured: temCredencial, model: MODEL, modelBriefing: MODEL_BRIEFING, stt: sttConfigurado() ? STT.modo : "navegador", effort: EFFORT, tools: FERRAMENTAS_LOCAIS.map(t => t.name).concat(telegramConfigurado() ? ["notificar_celular"] : [], recursos.webSearch ? ["web_search"] : []), streaming: true, tts: ttsConfigurado(), telegram: telegramConfigurado(), dataFile: fs.existsSync(ARQ.dados) });
       if (url === "/api/eventos" && req.method === "GET") { abrirSSE(res); clientesSSE.add(res); req.on("close", () => clientesSSE.delete(res)); return; }
       if (req.method !== "POST") return enviarJson(res, 405, { erro: "use POST" });
       if (!temCredencial) return enviarJson(res, 503, { erro: "Sem credencial. Defina ANTHROPIC_API_KEY em server/.env (veja .env.example)." });
-      const body = await lerJson(req);
+      const body = url === "/api/stt" ? await lerBruto(req) : await lerJson(req);
       if (url === "/api/session/reset") { const id = idSeguro(String(body.sessionId || "")); if (id) apagarSessao(id); return enviarJson(res, 200, { ok: true }); }
       if (url === "/api/tts") return await apiTts(res, String(body.texto || ""));
+      if (url === "/api/stt") return await apiStt(res, body);
       if (url !== "/api/chat" && url !== "/api/briefing") return enviarJson(res, 404, { erro: "rota desconhecida" });
       const texto = url === "/api/briefing" ? PEDIDO_BRIEFING : String(body.message ?? "").trim();
       if (!texto) return enviarJson(res, 400, { erro: "message vazio" });
-      const s = obterSessao(body.sessionId);
+      // o resumo matinal pode usar um modelo mais forte; nesse caso roda em sessão própria, não persistida
+      const s = (url === "/api/briefing" && MODEL_BRIEFING !== MODEL) ? novaSessao("briefing-" + randomUUID().slice(0, 8), MODEL_BRIEFING) : obterSessao(body.sessionId);
       const emitir = abrirSSE(res);
       try {
         const r = await conversar(s, texto, emitir);
-        salvarSessao(s);
-        emitir("done", { model: r.modelo, usage: r.uso, tools: r.ferramentasUsadas, truncated: r.truncado === true, refusal: r.recusa === true, texto: r.texto ?? "" });
+        if (s.model === MODEL) salvarSessao(s); else sessoes.delete(s.id);
+        emitir("done", { model: r.modelo, usage: r.uso, custo_usd: custoEstimado(r.modelo, r.uso), tools: r.ferramentasUsadas, truncated: r.truncado === true, refusal: r.recusa === true, texto: r.texto ?? "" });
       } catch (e) {
         const m = mensagemDeErro(e); console.error(`[jarvis] POST ${url} → ${m.status}: ${m.erro}`);
         // devolve a sessão a um estado consistente: remove o turno do usuário sem resposta
@@ -306,7 +348,8 @@ const server = http.createServer(async (req, res) => {
 
 server.listen(PORT, "127.0.0.1", () => {
   console.log(`JARVIS online em http://localhost:${PORT}/mission-control/`);
-  console.log(`  modelo: ${MODEL} · effort: ${EFFORT} · fallbacks: ${recursos.fallbacks ? "ativos" : "desligados"} · web search: ${recursos.webSearch ? "ativa" : "desligada"}`);
+  console.log(`  modelo: ${MODEL}${MODEL_BRIEFING !== MODEL ? " · resumo matinal: " + MODEL_BRIEFING : ""} · effort: ${EFFORT} · fallbacks: ${recursos.fallbacks && capacidades(MODEL).fallbacks ? "ativos" : "n/a"} · web search: ${recursos.webSearch ? "ativa" : "desligada"}`);
+  console.log(`  transcrição: ${sttConfigurado() ? STT.modo : "navegador"}${STT.modo !== "navegador" && !sttConfigurado() ? " (JARVIS_STT=" + STT.modo + " mas falta " + (STT.modo === "openai" ? "OPENAI_API_KEY" : "WHISPER_CMD") + ")" : ""}`);
   console.log(`  ferramentas locais: ${FERRAMENTAS_LOCAIS.map(t => t.name).join(", ")}${telegramConfigurado() ? ", notificar_celular" : ""}`);
   console.log(`  voz: ${ttsConfigurado() ? "ElevenLabs (" + ELEVEN.modelo + ")" : "navegador"} · telegram: ${telegramConfigurado() ? "ativo" : "não configurado"} · sessões: ${SESSOES_DIR}`);
   console.log(`  credencial: ${temCredencial ? "encontrada no ambiente" : "AUSENTE — o painel funciona em modo local; copie server/.env.example para server/.env"}`);

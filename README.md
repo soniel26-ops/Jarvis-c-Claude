@@ -102,7 +102,9 @@ Configuração por variáveis de ambiente (ou `server/.env`):
 | Variável | Padrão | Uso |
 |---|---|---|
 | `ANTHROPIC_API_KEY` | obrigatória | chave da API. Alternativas: `ANTHROPIC_AUTH_TOKEN` ou um perfil do `ant auth login` |
-| `JARVIS_MODEL` | `claude-fable-5-1` | modelo. `claude-opus-5` é a alternativa mais barata |
+| `JARVIS_MODEL` | `claude-sonnet-5` | cérebro do dia a dia. Veja a tabela de custo abaixo |
+| `JARVIS_MODEL_BRIEFING` | igual ao modelo | modelo só para o resumo matinal, se quiser um mais forte lá |
+| `JARVIS_STT` | `navegador` | transcrição: `navegador`, `openai` (Whisper pela API, exige `OPENAI_API_KEY`) ou `local` (exige `WHISPER_CMD` e ffmpeg) |
 | `JARVIS_EFFORT` | `medium` | `low` responde mais rápido; `high`/`xhigh` para análises mais fundas |
 | `JARVIS_PORT` | `8080` | porta |
 | `JARVIS_NOME_USUARIO` | `senhor` | como o Jarvis se dirige a você |
@@ -112,6 +114,27 @@ Configuração por variáveis de ambiente (ou `server/.env`):
 | `TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID` | vazios | lembretes e alertas no celular, e a ferramenta `notificar_celular` |
 
 O prompt de sistema está em `server/server.mjs`, na constante `SISTEMA_ESTAVEL`. Ele carrega as regras dos agentes (nenhum número fora das fontes, `INDISPONÍVEL` nunca é substituído) e é cacheado entre chamadas.
+
+### Custo por modelo
+
+Preços da Anthropic em dólares por milhão de tokens (entrada / saída). Uma pergunta típica ao JARVIS usa cerca de 6 mil tokens de entrada (prompt, dados do painel e ferramentas, em boa parte servidos do cache) e 150 a 300 de saída.
+
+| Modelo | Entrada / saída | Uma pergunta típica, aproximado | Quando usar |
+|---|---|---|---|
+| `claude-haiku-4-5` | 1 / 5 | menos de 1 centavo | o mais barato; respostas simples, sem raciocínio adaptativo |
+| `claude-sonnet-5` | 2 / 10 | cerca de 1 a 1,5 centavo | **padrão**: boa qualidade, rápido, usa ferramentas bem |
+| `claude-opus-5` | 5 / 25 | cerca de 3 a 4 centavos | análises mais fundas; bom para `JARVIS_MODEL_BRIEFING` |
+| `claude-fable-5-1` | 10 / 50 | cerca de 7 a 8 centavos | o mais capaz; raramente necessário para conversa por voz |
+
+Os valores por pergunta são estimativas a partir do tamanho atual do prompt; o painel mostra o custo real de cada resposta no DIAGNÓSTICO (`custo_usd`) e o `npm run doctor` mostra o custo da chamada de teste. O servidor monta cada requisição conforme o que o modelo aceita (esforço, raciocínio adaptativo, fallbacks, mensagens de sistema no meio da conversa, variante da busca na web), então trocar `JARVIS_MODEL` não gera requisição inválida.
+
+### Transcrição por Whisper
+
+Por padrão o painel usa o reconhecimento de voz do navegador. Com `JARVIS_STT=openai` (mais `OPENAI_API_KEY`) ou `JARVIS_STT=local` (mais `WHISPER_CMD`, por exemplo whisper.cpp, e ffmpeg instalado), o aperte-e-fale grava o áudio e o servidor transcreve pela rota `/api/stt`. No modo mãos livres, a palavra "Jarvis" continua sendo detectada pelo navegador (gratuito e contínuo); o comando que vem depois do "Sim?" é gravado até você parar de falar e transcrito pelo Whisper. Se a transcrição falhar, o painel avisa no DIAGNÓSTICO.
+
+### Subagentes do Operador
+
+Os subagentes são subagentes reais do Claude Code em `.claude/agents/`: `desenvolvedor`, `designer`, `financeiro` e `pesquisador`, cada um com as próprias ferramentas e modelo (os dois últimos e o designer rodam em Haiku/Sonnet para custar pouco). Quando o Operador roda pelo Claude Code, ele delega com a ferramenta `Agent`. Detalhes em `agents/subagentes/README.md`.
 
 ### Como o servidor trata o Claude Fable 5.1
 

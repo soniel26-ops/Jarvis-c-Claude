@@ -631,9 +631,50 @@ function deepMerge(dst, src){ for (const k in src){ if (src[k] && typeof src[k]=
 const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
 let recog = null, listening = false;
 function setState(s, label){ jarvis.state = s; $("#state").textContent = label || {idle:"AGUARDANDO",listening:"OUVINDO…",thinking:"PROCESSANDO…",speaking:"FALANDO"}[s]; }
+/* ---- Whisper: grava o microfone e manda ao servidor transcrever (/api/stt) ---- */
+const gravador = { stream:null, rec:null, partes:[], ativo:false };
+async function obterMicrofone(){ if (gravador.stream && gravador.stream.active) return gravador.stream; gravador.stream = await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true, noiseSuppression:true}}); return gravador.stream; }
+function tipoGravacao(){ for (const t of ["audio/webm;codecs=opus","audio/webm","audio/ogg;codecs=opus","audio/mp4"]) if (window.MediaRecorder && MediaRecorder.isTypeSupported(t)) return t; return ""; }
+async function iniciarGravacao(){
+  const stream = await obterMicrofone(); const tipo = tipoGravacao();
+  gravador.partes = []; gravador.rec = new MediaRecorder(stream, tipo ? {mimeType: tipo} : undefined);
+  gravador.rec.ondataavailable = e => { if (e.data && e.data.size) gravador.partes.push(e.data); };
+  gravador.rec.start(250); gravador.ativo = true;
+}
+function pararGravacao(){
+  return new Promise(res=>{
+    const r = gravador.rec; if (!r || r.state === "inactive"){ gravador.ativo = false; return res(null); }
+    r.onstop = ()=>{ gravador.ativo = false; res(new Blob(gravador.partes, {type: r.mimeType || "audio/webm"})); }; r.stop();
+  });
+}
+async function transcrever(blob){
+  if (!blob || blob.size < 800) return "";
+  const r = await fetch("/api/stt", {method:"POST", headers:{"content-type": blob.type || "audio/webm"}, body: blob});
+  const j = await r.json().catch(()=>({})); if (!r.ok) throw new Error(j.erro || `HTTP ${r.status}`);
+  return (j.texto || "").trim();
+}
+// grava até o usuário parar de falar (detecção simples de silêncio) ou até o limite; devolve o texto transcrito
+async function gravarComandoAteSilencio({maxMs=12000, silencioMs=1300, esperaFalaMs=5000}={}){
+  const stream = await obterMicrofone(); const ctx = new (window.AudioContext||window.webkitAudioContext)();
+  const src = ctx.createMediaStreamSource(stream), an = ctx.createAnalyser(); an.fftSize = 1024; src.connect(an); const buf = new Uint8Array(an.fftSize);
+  await iniciarGravacao(); setState("listening", "OUVINDO…");
+  const t0 = performance.now(); let falou = false, ultimoSom = t0;
+  await new Promise(res=>{ const tick = ()=>{ an.getByteTimeDomainData(buf); let soma = 0; for (const v of buf){ const d = (v-128)/128; soma += d*d; } const rms = Math.sqrt(soma/buf.length);
+    const agora = performance.now(); if (rms > 0.02){ falou = true; ultimoSom = agora; }
+    if (agora - t0 > maxMs || (falou && agora - ultimoSom > silencioMs) || (!falou && agora - t0 > esperaFalaMs) || !gravador.ativo) return res(); setTimeout(tick, 80); }; tick(); });
+  const blob = await pararGravacao(); try { ctx.close(); } catch(_){}
+  if (!falou) return "";
+  setState("thinking", "TRANSCREVENDO…"); return await transcrever(blob);
+}
+
 function startListening(){
   if (listening) return;
   if (maosLivres.recog){ try { maosLivres.recog.onend = null; maosLivres.recog.stop(); } catch(_){} maosLivres.recog = null; }
+  if (cerebro.stt !== "navegador" && window.MediaRecorder){   // aperte-e-fale pelo Whisper
+    pararFala(); listening = true; setState("listening"); log("telemetry", "Microfone aberto (Whisper)");
+    iniciarGravacao().catch(e=>{ listening = false; setState("idle"); log("diag", `gravação: ${e.message}`, "warn"); if (e.name === "NotAllowedError") say("Preciso de permissão para usar o microfone."); });
+    return;
+  }
   if (!SR){ say("Reconhecimento de voz não está disponível neste navegador. Use o campo de texto."); return; }
   pararFala();
   recog = new SR(); recog.lang = CONFIG.idiomaVoz; recog.interimResults = false; recog.maxAlternatives = 1;
@@ -642,7 +683,13 @@ function startListening(){
   recog.onend = () => { listening = false; if (jarvis.state==="listening") setState("idle"); if (maosLivres.ativo) setTimeout(reiniciarEscutaContinua, 600); };
   recog.start(); listening = true; setState("listening"); log("telemetry","Microfone aberto");
 }
-function stopListening(){ if (recog && listening){ try{ recog.stop(); }catch(_){} } listening = false; if (jarvis.state==="listening") setState("idle"); }
+function stopListening(){
+  if (gravador.ativo){
+    listening = false;
+    pararGravacao().then(async blob=>{ setState("thinking", "TRANSCREVENDO…"); try { const t = await transcrever(blob); if (t) handleInput(t); else setState("idle"); } catch(e){ log("diag", `transcrição falhou (${e.message})`, "warn"); setState("idle"); } if (maosLivres.ativo) setTimeout(reiniciarEscutaContinua, 600); });
+    return;
+  }
+  if (recog && listening){ try{ recog.stop(); }catch(_){} } listening = false; if (jarvis.state==="listening") setState("idle"); }
 
 let voice = null;
 function pickVoice(){
@@ -690,7 +737,7 @@ async function falarElevenLabs(text){
    ===================================================================== */
 function sessaoGuardada(){ try { const v = localStorage.getItem("jarvis.sessionId"); if (v && /^[A-Za-z0-9_-]{1,64}$/.test(v)) return v; } catch(_){} return null; }
 function novoIdSessao(){ const id = (crypto.randomUUID ? crypto.randomUUID() : "s"+Date.now().toString(36)+Math.random().toString(36).slice(2,8)); try { localStorage.setItem("jarvis.sessionId", id); } catch(_){} return id; }
-const cerebro = { modo: "local", modelo: null, historico: [], sessionId: sessaoGuardada() || novoIdSessao(), eventos: null, tts: false };   // modo: local · claude
+const cerebro = { modo: "local", modelo: null, historico: [], sessionId: sessaoGuardada() || novoIdSessao(), eventos: null, tts: false, stt: "navegador" };   // modo: local · claude · stt: navegador | openai | local
 async function novaConversa(){
   try { await fetch("/api/session/reset", {method:"POST", headers:{"content-type":"application/json"}, body: JSON.stringify({sessionId: cerebro.sessionId})}); } catch(_){}
   cerebro.sessionId = novoIdSessao(); log("telemetry", "Nova conversa iniciada (sessão " + cerebro.sessionId.slice(0,8) + ")", "ai");
@@ -701,7 +748,8 @@ async function detectarBackend(){
   try {
     const r = await fetch(CONFIG.backend.health, {cache:"no-store"}); if (!r.ok) throw new Error(r.status);
     const h = await r.json();
-    if (h.configured){ cerebro.modo = "claude"; cerebro.modelo = h.model; cerebro.tts = !!h.tts;
+    if (h.configured){ cerebro.modo = "claude"; cerebro.modelo = h.model; cerebro.tts = !!h.tts; cerebro.stt = h.stt || "navegador";
+      if (cerebro.stt !== "navegador") log("diag", `transcrição: Whisper (${cerebro.stt}) via servidor local`);
       if (h.tts) log("diag", "voz: ElevenLabs via servidor local"); if (h.telegram) log("diag", "notificações no celular: Telegram ativo");
       $("#brain-text").textContent = "CLAUDE · " + h.model; $("#brain-badge").classList.add("live");
       log("telemetry", `Cérebro: Claude (${h.model}, effort ${h.effort}) via servidor local`, "ai");
@@ -882,6 +930,12 @@ function reiniciarEscutaContinua(){
       if (!m) continue;   // sem palavra de ativação: ruído de ambiente, ignorar
       const comando = bruto.slice(m.index + m[0].length).trim();
       if (comando.length < 3){
+        if (cerebro.stt !== "navegador" && window.MediaRecorder){
+          // Whisper: pausa a escuta contínua, grava o comando até o silêncio e transcreve
+          try { r.onend = null; r.stop(); } catch(_){} maosLivres.recog = null;
+          say("Sim?", {log:false}).then(()=>gravarComandoAteSilencio()).then(t=>{ if (t) handleInput(t); else setState("idle"); }).catch(e=>{ log("diag", `comando por Whisper falhou (${e.message})`, "warn"); setState("idle"); }).finally(()=>{ if (maosLivres.ativo) setTimeout(reiniciarEscutaContinua, 500); });
+          return;
+        }
         maosLivres.aguardandoComando = true; setState("listening", "SIM?"); say("Sim?", {log:false});
         maosLivres.timer = setTimeout(()=>{ maosLivres.aguardandoComando = false; if (jarvis.state==="listening") setState("idle"); }, 8000);
       } else handleInput(comando);

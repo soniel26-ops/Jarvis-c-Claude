@@ -14,7 +14,7 @@ HOJE=$(date +%F); mkdir -p data/logs data/briefings
 git pull --rebase --autostash -q 2>/dev/null || echo "⚠ git pull falhou (sem remoto ou sem rede); seguindo com a cópia local"
 PROMPT="Você está na raiz do repositório JARVIS ($(pwd)). Hoje é $HOJE. Você é o agente '$AGENTE'.
 Leia o arquivo agents/$AGENTE.md inteiro e siga-o integralmente: colete o que ele pede usando os conectores disponíveis e grave os arquivos exatamente nos caminhos e formatos que ele indica (data/briefings/$HOJE-$AGENTE.md e os campos de data/mission-data.json que pertencem a você). Não altere nenhum outro arquivo. Se um conector não estiver disponível, escreva INDISPONÍVEL onde couber e registre a falha em alertas. Ao terminar, imprima o relatório final."
-PERMITIDAS="Read,Write,Edit,Glob,Grep,Bash(ls:*),Bash(cat:*),Bash(date:*)${JARVIS_MCP_PERMITIDOS:+,$JARVIS_MCP_PERMITIDOS}"
+PERMITIDAS="Read,Write,Edit,Glob,Grep,Agent,WebSearch,WebFetch,Bash(ls:*),Bash(cat:*),Bash(date:*),Bash(git:*),Bash(node:*)${JARVIS_MCP_PERMITIDOS:+,$JARVIS_MCP_PERMITIDOS}"
 echo "→ $AGENTE · $HOJE · ferramentas: $PERMITIDAS"
 claude -p "$PROMPT" --allowedTools "$PERMITIDAS" --output-format text 2>&1 | tee "data/logs/$HOJE-$AGENTE.log"
 ./scripts/sincronizar.sh

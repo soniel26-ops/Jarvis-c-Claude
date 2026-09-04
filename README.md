@@ -6,6 +6,13 @@ Assistente pessoal de IA que monitora receita, gerencia e-mails, publica conteú
 mission-control/index.html      tela de controle (HTML único, CSS+JS embutidos, sem dependências)
 server/server.mjs               servidor local: serve o painel e liga o cérebro ao Claude (SDK oficial)
 CHECKLIST.md                    passo a passo para deixar tudo operacional na sua máquina
+server/ferramentas.mjs          ferramentas locais do JARVIS (memória, lembretes, FAQ, registro, meta)
+server/doctor.mjs               diagnóstico: máquina, arquivos, ferramentas e uma chamada real à API
+scripts/instalar.sh|.ps1        instala, pede a chave, roda o diagnóstico
+scripts/agente.sh|.ps1          roda um agente pelo Claude Code e sincroniza
+scripts/agendar.sh|.ps1         agenda os agentes (cron / Agendador de Tarefas)
+scripts/sincronizar.sh|.ps1     commit + pull + push de data/ e conhecimento/
+scripts/servico/                servidor no login (launchd, Agendador, pm2) e painel em janela de app
 agents/explorador.md            prompt + regras da rotina do Explorador (somente leitura)
 agents/operador.md              prompt + regras do Operador (e-mail, publicação, delegação)
 agents/conselheiro.md           prompt + regras do Conselheiro (3 recomendações/dia)
@@ -49,12 +56,12 @@ Voz: usa o reconhecimento e a síntese do próprio navegador (Chrome e Edge têm
 O painel sozinho responde por regras simples. Com o servidor local em `server/`, quem responde é o Claude Fable 5.1 (ou outro modelo que você escolher), com ferramentas, memória e os dados do painel como contexto. A chave da API fica só no processo Node.
 
 ```bash
-cd server
-npm install
-cp .env.example .env        # edite e coloque sua ANTHROPIC_API_KEY
-npm start
+./scripts/instalar.sh       # Windows: powershell -ExecutionPolicy Bypass -File scripts\instalar.ps1
+cd server && npm start
 # abra http://localhost:8080/mission-control/
 ```
+
+O instalador verifica Node e Git, instala as dependências, pede a chave, grava `server/.env` e roda `npm run doctor`, que testa arquivos, ferramentas e faz uma chamada pequena à API dizendo quais recursos a sua conta aceitou. Passo a passo completo em `CHECKLIST.md`.
 
 O que o servidor faz:
 

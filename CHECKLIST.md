@@ -1,7 +1,12 @@
 # Checklist · JARVIS 100% operacional no seu computador
 
 Marque cada item ao concluir. As fases estão em ordem de dependência: não pule.
-Estado do que já existe no repositório: painel, servidor agêntico e prompts dos agentes prontos e testados sem chave real. O que falta é o que depende da sua máquina, da sua conta e dos seus dados.
+Estado do que já existe no repositório: painel, servidor agêntico, prompts dos agentes e scripts de instalação, diagnóstico, agendamento e serviço, todos testados sem chave real. O que falta é o que depende da sua máquina, da sua conta e dos seus dados.
+
+Atalho: as Fases 0, 1 e 2 são um comando só.
+- macOS / Linux: `./scripts/instalar.sh`
+- Windows (PowerShell): `powershell -ExecutionPolicy Bypass -File scripts\instalar.ps1`
+Ele verifica Node e Git, instala, pede a chave, grava o `.env` e roda o diagnóstico (`npm run doctor`), que faz uma chamada pequena à API e diz o que a sua conta aceitou.
 
 ---
 
@@ -31,6 +36,7 @@ Estado do que já existe no repositório: painel, servidor agêntico e prompts d
   ```
   (No Windows sem bash: `copy .env.example .env`.)
 - [ ] Abrir `server/.env` e colar a chave em `ANTHROPIC_API_KEY=`. Ajustar `JARVIS_NOME_USUARIO` (como ele te chama).
+- [ ] Rodar o diagnóstico: `npm run doctor` (ou `npm run doctor:local` para não gastar nada). Tudo ✔ ou ⚠ antes de seguir; ✘ traz o próximo passo na própria saída.
 - [ ] Iniciar: `npm start`. O terminal deve mostrar `credencial: encontrada no ambiente`.
 - [ ] Abrir http://localhost:8080/mission-control/ no Chrome ou Edge.
 - [ ] Conferir no rodapé: selo **CÉREBRO** = `CLAUDE · claude-fable-5-1`. Se estiver `LOCAL`, veja o painel DIAGNÓSTICO e o terminal do servidor.
@@ -40,8 +46,9 @@ Estado do que já existe no repositório: painel, servidor agêntico e prompts d
 
 Faça cada pergunta pelo campo de texto e olhe o terminal do servidor depois de cada uma.
 
+- [ ] **`npm run doctor` com a chave no `.env`.** A seção "API do Claude" mostra se o modelo respondeu, a latência, o custo da chamada e quais recursos beta a sua conta aceitou (fallbacks, controle de blocos de raciocínio, web search). Para cada ⚠ ele diz qual variável pôr no `.env` para não repetir o erro.
 - [ ] **Pergunta simples:** "como está a receita?". Deve responder com os números do painel em prosa falada.
-- [ ] **Olhar o terminal.** Procure linhas `[jarvis] ... rejeitados; desligando`. Cada uma diz que um recurso beta não foi aceito pela sua conta (fallbacks, controle de blocos de raciocínio ou web search). O servidor segue sem ele. Anote quais apareceram; se `web_search` for rejeitado, ponha `JARVIS_WEB_SEARCH=0` no `.env` para não repetir o erro a cada sessão.
+- [ ] **Olhar o terminal do servidor.** Linhas `[jarvis] ... rejeitados; desligando` repetem o que o doctor mostrou; o servidor segue sem o recurso.
 - [ ] **Memória:** "lembre que eu prefiro relatórios curtos". Conferir a linha nova em `data/memoria.md`.
 - [ ] **Lembrete:** "me lembra em 1 minuto de beber água". Esperar: o painel deve falar sozinho. Conferir `data/lembretes.json`.
 - [ ] **Leitura de arquivo:** "o que tem no registro de recomendações?". Ele deve ler `data/registro-recomendacoes.md`.
@@ -70,22 +77,22 @@ Faça cada pergunta pelo campo de texto e olhe o terminal do servidor depois de 
 Hoje os três agentes são prompts prontos em `agents/`. Eles só coletam e escrevem quando alguma coisa os executa no horário. Ainda não existe automação disso no repositório.
 
 - [ ] **Escolher o executor.** Duas opções realistas:
-  - **A · Rotinas do Claude** (claude.ai → Rotinas/tarefas agendadas, se disponíveis na sua conta): crie uma rotina por agente colando o prompt do arquivo correspondente. A rotina precisa conseguir gravar nos arquivos deste repositório: dê a ela acesso ao repositório GitHub `soniel26-ops/Jarvis-c-Claude` (ela faz commit) ou aponte a saída para uma pasta sincronizada (Google Drive, iCloud) e mude os caminhos em `server/server.mjs` (`ARQ`) e no painel (`CONFIG.arquivoDados`).
-  - **B · Claude Code agendado na sua máquina:** um agendador do sistema (Agendador de Tarefas no Windows, `launchd`/`cron` no macOS/Linux) roda `claude -p "$(cat agents/explorador.md)"` na pasta do repositório todo dia às 06:00. Exige o Claude Code instalado e logado e os conectores configurados nele.
+  - **A · Rotinas do Claude** (claude.ai → Rotinas/tarefas agendadas, se disponíveis na sua conta): crie uma rotina por agente colando o prompt do arquivo correspondente. A rotina precisa conseguir gravar nos arquivos deste repositório: dê a ela acesso ao repositório GitHub `soniel26-ops/Jarvis-c-Claude` (ela faz commit) ou aponte a saída para uma pasta sincronizada (Google Drive, iCloud) e mude os caminhos em `server/ferramentas.mjs` (`ARQ`) e no painel (`CONFIG.arquivoDados`).
+  - **B · Claude Code agendado na sua máquina (scripts prontos):** `scripts/agente.sh explorador` (ou `agente.ps1`) roda o agente pelo Claude Code, grava os arquivos e chama `sincronizar`. `scripts/agendar.sh` (ou `agendar.ps1`) instala os horários: Explorador 06:00, Conselheiro 06:20, Operador a cada 3 h das 08 às 20, sincronização 06:30. Exige `npm i -g @anthropic-ai/claude-code` + `claude login` e os conectores configurados no Claude Code como servidores MCP; liste-os em `JARVIS_MCP_PERMITIDOS` no `server/.env` (ex.: `mcp__revenuecat,mcp__meta-ads`).
 - [ ] **Conectar só dois conectores primeiro:** os que têm seus números mais importantes (por exemplo RevenueCat e Meta Ads; ou Stripe via Claude no Chrome). Os demais depois.
-- [ ] **Explorador (Scout) primeiro**, 06:00. Rodar uma vez manualmente. Verificar: arquivo novo em `data/briefings/AAAA-MM-DD-explorador.md`; `data/mission-data.json` com `meta.fonte = "REAL"` e cada bloco com `fonte` e `data`; valores não verificáveis como `"INDISPONÍVEL"`, nunca `0`. Deixar rodar 3 dias e ler os briefings.
-- [ ] **Se a rotina gravar no GitHub**, sua máquina precisa puxar antes de você acordar: agende `git pull` às 06:30 na pasta do repositório (mesmo agendador da opção B). Sem isso o painel mostra dados velhos.
+- [ ] **Explorador (Scout) primeiro**, 06:00. Rodar uma vez manualmente (`./scripts/agente.sh explorador`). Verificar: arquivo novo em `data/briefings/AAAA-MM-DD-explorador.md`; `data/mission-data.json` com `meta.fonte = "REAL"` e cada bloco com `fonte` e `data`; valores não verificáveis como `"INDISPONÍVEL"`, nunca `0`. Deixar rodar 3 dias e ler os briefings.
+- [ ] **Se a rotina gravar no GitHub** (opção A), sua máquina precisa puxar antes de você acordar: `scripts/agendar.sh` já agenda `sincronizar` às 06:30 (pull, commit e push). Sem isso o painel mostra dados velhos.
 - [ ] **Operador**, a cada 3 horas, Gmail e Buffer conectados, `MODO: RASCUNHO`. Durante a primeira semana, ler todos os rascunhos antes de enviar. Só depois trocar para `MODO: AUTÔNOMO-FAQ` no `agents/operador.md`. Dinheiro, reembolso e jurídico nunca ficam autônomos.
 - [ ] **Conselheiro**, 06:20, depois que o Explorador tiver 3 ou mais briefings. Verificar `recomendacoes` (exatamente 3) e `pendentes7dias` no `mission-data.json`, e o bloco novo em `data/registro-recomendacoes.md`.
 - [ ] **Fechar o ciclo diariamente:** ler as 3 recomendações; dizer ao JARVIS "feito" ou "descartei" (ele marca no registro). O que não for decidido volta por 7 dias.
 
 ## Fase 5 · Deixar sempre ligado (30 min)
 
-- [ ] **Servidor no login.**
-  - Windows: Agendador de Tarefas → Criar tarefa → Disparador "Ao fazer logon" → Ação: programa `node`, argumentos `server.mjs`, iniciar em `C:\caminho\Jarvis-c-Claude\server`. Marcar "Executar oculto".
-  - macOS: um `.plist` em `~/Library/LaunchAgents` com `ProgramArguments` = caminho do `node` + `server.mjs` e `WorkingDirectory` = pasta `server`; `RunAtLoad true`, `KeepAlive true`.
-  - Alternativa em qualquer sistema: `npm i -g pm2`, depois `pm2 start server.mjs --name jarvis` e `pm2 startup` + `pm2 save`.
-- [ ] **Painel como aplicativo.** Chrome/Edge → menu → Salvar e compartilhar → Instalar página como app (ou atalho com `--app=http://localhost:8080/mission-control/`). Abre em janela própria, sem barra de endereço.
+- [ ] **Servidor no login (scripts prontos).**
+  - Windows: `powershell -ExecutionPolicy Bypass -File scripts\servico\instalar-servico.ps1` (tarefa "JARVIS Servidor" ao fazer logon, janela oculta, log em `data/logs/jarvis.log`).
+  - macOS: `./scripts/servico/instalar-launchd.sh` (LaunchAgent `com.jarvis.server`, reinicia se cair).
+  - Qualquer sistema: `npm i -g pm2 && pm2 start scripts/servico/ecosystem.config.cjs && pm2 save && pm2 startup`.
+- [ ] **Painel como aplicativo.** `scripts/servico/abrir-painel.sh` (ou `.ps1`) abre o Chrome/Edge em janela de app, sem barra de endereço. Ou: Chrome → menu → Salvar e compartilhar → Instalar página como app.
 - [ ] **Abrir o painel no login** (adicionar o atalho do app às Iniciar/Itens de login) e impedir que a tela desligue, se quiser o HUD sempre visível.
 - [ ] **Microfone sempre permitido** para `http://localhost:8080` nas configurações do site, para o modo mãos livres não perguntar de novo.
 - [ ] **Sessão nova a cada carga.** Saiba que recarregar o painel ou reiniciar o servidor recomeça a conversa. A memória em `data/memoria.md` e os lembretes em `data/lembretes.json` persistem.
@@ -95,7 +102,7 @@ Hoje os três agentes são prompts prontos em `agents/`. Eles só coletam e escr
 - [ ] `server/.env` **nunca** vai para o Git (já está no `.gitignore`); confirme com `git status`.
 - [ ] O servidor escuta só em `127.0.0.1`. Não abra a porta no roteador nem use túnel público sem colocar autenticação na frente.
 - [ ] **Limite de gasto mensal** na conta Anthropic, e conferir Usage no fim da primeira semana. Ordem de custo: modelo (Fable 5.1 > Opus 5) > esforço > web search > tamanho do `mission-data.json`.
-- [ ] **Versionar o que o JARVIS escreve.** Uma vez por dia ou por semana: `git add data conhecimento && git commit -m "dados" && git push`. Pode ser agendado junto com o `git pull` da Fase 4.
+- [ ] **Versionar o que o JARVIS escreve.** `./scripts/sincronizar.sh` (ou `.ps1`) faz commit de `data/` e `conhecimento/`, pull e push. Já entra no agendamento da Fase 4 às 06:30 e 21:00.
 - [ ] **Revisar `data/memoria.md` mensalmente**: apagar o que ficou errado ou velho.
 - [ ] **Revogar e recriar a chave** se ela vazar em qualquer lugar (log, captura de tela, commit).
 

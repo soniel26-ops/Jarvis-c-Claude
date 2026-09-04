@@ -6,9 +6,13 @@
   "private": true,
   "scripts": {
     "start": "node server.mjs",
-    "dev": "node --watch server.mjs"
+    "dev": "node --watch server.mjs",
+    "doctor": "node doctor.mjs",
+    "doctor:local": "node doctor.mjs --sem-api"
   },
-  "engines": { "node": ">=20" },
+  "engines": {
+    "node": ">=20"
+  },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.123.0"
   }
